@@ -1,30 +1,28 @@
 
 import { useEffect, useMemo, useState } from "react";
-import { Canvas, ThreeEvent } from "@react-three/fiber";
-import {
-  OrbitControls,
-  Stars,
-  ContactShadows,
-} from "@react-three/drei";
+import { Canvas } from "@react-three/fiber";
+import { OrbitControls, Stars, ContactShadows } from "@react-three/drei";
 import * as THREE from "three";
 
 // ==================================================
 // MARS: THE NEW FRONTIER
-// PHASE 2 — COLONY ECONOMY
+// PHASE 3 — WATER EXTRACTION
 // ==================================================
 
 const SOL_DURATION = 5000;
 const GRID_SIZE = 8;
 const MAX_ENERGY = 300;
+const MAX_WATER = 500;
 
 const BUILDINGS = [
   {
     id: "habitat",
     name: "Habitat",
     icon: "⌂",
-    description: "Residential module for colonists.",
+    description: "Residential module. Consumes 6 energy per Sol.",
     status: "AVAILABLE",
     cost: { metal: 55, energy: 12 },
+    radius: 8,
   },
   {
     id: "solar",
@@ -33,13 +31,16 @@ const BUILDINGS = [
     description: "Generates 24 energy per Sol.",
     status: "AVAILABLE",
     cost: { metal: 40, energy: 8 },
+    radius: 13,
   },
   {
     id: "extractor",
     name: "Water Extractor",
     icon: "◉",
-    description: "Extracts water from Martian resources.",
-    status: "COMING SOON",
+    description: "Produces 15 water. Consumes 8 energy per Sol.",
+    status: "AVAILABLE",
+    cost: { metal: 45, energy: 10 },
+    radius: 10,
   },
   {
     id: "greenhouse",
@@ -52,7 +53,7 @@ const BUILDINGS = [
     id: "mine",
     name: "Mining Facility",
     icon: "◇",
-    description: "Extracts minerals and metals.",
+    description: "Extracts metals from Martian deposits.",
     status: "COMING SOON",
   },
   {
@@ -71,6 +72,18 @@ const INITIAL_RESOURCES = {
   food: 100,
 };
 
+const initialBuildings = [
+  {
+    id: 1,
+    type: "habitat",
+    position: [0, terrainHeight(0, 0), 0],
+  },
+];
+
+// ==================================================
+// TERRAIN
+// ==================================================
+
 function terrainHeight(x, z) {
   return (
     Math.sin(x * 0.07) * 0.45 +
@@ -83,10 +96,6 @@ function terrainHeight(x, z) {
 function snapToGrid(value) {
   return Math.round(value / GRID_SIZE) * GRID_SIZE;
 }
-
-// ==================================================
-// TERRAIN
-// ==================================================
 
 function MarsGround({ onPlace, onHover }) {
   const geometry = useMemo(() => {
@@ -110,9 +119,15 @@ function MarsGround({ onPlace, onHover }) {
       const color = new THREE.Color();
 
       if (y < -0.3) {
-        color.copy(low).lerp(mid, THREE.MathUtils.clamp((y + 1) / 0.7, 0, 1));
+        color.copy(low).lerp(
+          mid,
+          THREE.MathUtils.clamp((y + 1) / 0.7, 0, 1)
+        );
       } else {
-        color.copy(mid).lerp(high, THREE.MathUtils.clamp((y + 0.3) / 1.3, 0, 1));
+        color.copy(mid).lerp(
+          high,
+          THREE.MathUtils.clamp((y + 0.3) / 1.3, 0, 1)
+        );
       }
 
       colors.push(color.r, color.g, color.b);
@@ -126,6 +141,10 @@ function MarsGround({ onPlace, onHover }) {
     geo.computeVertexNormals();
     return geo;
   }, []);
+
+  useEffect(() => {
+    return () => geometry.dispose();
+  }, [geometry]);
 
   const rocks = useMemo(() => {
     const result = [];
@@ -161,11 +180,7 @@ function MarsGround({ onPlace, onHover }) {
           onPlace(event.point.x, event.point.z);
         }}
       >
-        <meshStandardMaterial
-          vertexColors
-          roughness={1}
-          metalness={0}
-        />
+        <meshStandardMaterial vertexColors roughness={1} />
       </mesh>
 
       {rocks.map((rock) => (
@@ -177,10 +192,7 @@ function MarsGround({ onPlace, onHover }) {
           castShadow
         >
           <dodecahedronGeometry args={[1, 0]} />
-          <meshStandardMaterial
-            color="#754534"
-            roughness={1}
-          />
+          <meshStandardMaterial color="#754534" roughness={1} />
         </mesh>
       ))}
     </group>
@@ -188,13 +200,12 @@ function MarsGround({ onPlace, onHover }) {
 }
 
 // ==================================================
-// HABITAT
+// HABITAT MODEL
 // ==================================================
 
 function Habitat({ position }) {
   return (
     <group position={position}>
-      {/* Foundation */}
       <mesh position={[0, 0.18, 0]} receiveShadow castShadow>
         <boxGeometry args={[6.4, 0.35, 4.4]} />
         <meshStandardMaterial
@@ -204,7 +215,6 @@ function Habitat({ position }) {
         />
       </mesh>
 
-      {/* Main capsule */}
       <mesh
         position={[0, 1.9, 0]}
         rotation={[0, 0, Math.PI / 2]}
@@ -218,7 +228,6 @@ function Habitat({ position }) {
         />
       </mesh>
 
-      {/* Rounded ends */}
       {[-2.6, 2.6].map((x) => (
         <mesh key={x} position={[x, 1.9, 0]} castShadow>
           <sphereGeometry args={[1.55, 24, 16]} />
@@ -230,7 +239,6 @@ function Habitat({ position }) {
         </mesh>
       ))}
 
-      {/* Structural rings */}
       {[-1.9, 0, 1.9].map((x) => (
         <mesh
           key={x}
@@ -247,32 +255,26 @@ function Habitat({ position }) {
         </mesh>
       ))}
 
-      {/* Windows */}
       {[-1.6, 0, 1.6].map((x) => (
         <group key={x}>
-          <mesh position={[x, 2.35, 1.43]}>
-            <boxGeometry args={[0.85, 0.52, 0.09]} />
-            <meshStandardMaterial
-              color="#122c42"
-              emissive="#17436a"
-              emissiveIntensity={0.35}
-              metalness={0.7}
-              roughness={0.18}
-            />
-          </mesh>
-
-          <mesh position={[x, 2.35, -1.43]}>
-            <boxGeometry args={[0.85, 0.52, 0.09]} />
-            <meshStandardMaterial
-              color="#122c42"
-              emissive="#17436a"
-              emissiveIntensity={0.35}
-            />
-          </mesh>
+          {[1, -1].map((side) => (
+            <mesh
+              key={side}
+              position={[x, 2.35, side * 1.43]}
+            >
+              <boxGeometry args={[0.85, 0.52, 0.09]} />
+              <meshStandardMaterial
+                color="#122c42"
+                emissive="#17436a"
+                emissiveIntensity={0.35}
+                metalness={0.7}
+                roughness={0.18}
+              />
+            </mesh>
+          ))}
         </group>
       ))}
 
-      {/* Airlock */}
       <mesh position={[0, 1.35, 1.75]} castShadow>
         <boxGeometry args={[1.5, 1.85, 0.75]} />
         <meshStandardMaterial
@@ -284,13 +286,9 @@ function Habitat({ position }) {
 
       <mesh position={[0, 1.35, 2.15]}>
         <boxGeometry args={[0.9, 1.4, 0.08]} />
-        <meshStandardMaterial
-          color="#263d4b"
-          metalness={0.6}
-        />
+        <meshStandardMaterial color="#263d4b" metalness={0.6} />
       </mesh>
 
-      {/* Support legs */}
       {[-2.2, 2.2].map((x) =>
         [-1.5, 1.5].map((z) => (
           <mesh
@@ -304,7 +302,6 @@ function Habitat({ position }) {
         ))
       )}
 
-      {/* Roof equipment */}
       <mesh position={[1.1, 3.5, 0]} castShadow>
         <boxGeometry args={[1.2, 0.3, 0.8]} />
         <meshStandardMaterial color="#59636a" metalness={0.7} />
@@ -315,7 +312,6 @@ function Habitat({ position }) {
         <meshStandardMaterial color="#c2c8c9" />
       </mesh>
 
-      {/* Small integrated solar panels */}
       {[-1, 1].map((side) => (
         <group key={side} position={[0, 1.1, side * 3.2]}>
           <mesh rotation={[-0.12 * side, 0, 0]} castShadow>
@@ -344,7 +340,7 @@ function Habitat({ position }) {
 }
 
 // ==================================================
-// SOLAR ARRAY
+// SOLAR ARRAY MODEL
 // ==================================================
 
 function SolarArray({ position }) {
@@ -368,13 +364,9 @@ function SolarArray({ position }) {
         />
       </mesh>
 
-      {/* Panel banks */}
       {[-1, 1].map((side) => (
         <group key={side} position={[side * 4.3, 1.75, 0]}>
-          <mesh
-            rotation={[0, 0, side * -0.12]}
-            castShadow
-          >
+          <mesh rotation={[0, 0, side * -0.12]} castShadow>
             <boxGeometry args={[5.5, 0.14, 3.8]} />
             <meshStandardMaterial
               color="#0c3156"
@@ -412,7 +404,6 @@ function SolarArray({ position }) {
         </group>
       ))}
 
-      {/* Converter */}
       <mesh position={[0, 1.9, 0]} castShadow>
         <boxGeometry args={[1.2, 0.7, 1.2]} />
         <meshStandardMaterial
@@ -422,7 +413,6 @@ function SolarArray({ position }) {
         />
       </mesh>
 
-      {/* Antenna */}
       <mesh position={[0, 2.85, -1.1]} castShadow>
         <cylinderGeometry args={[0.045, 0.045, 1.8, 10]} />
         <meshStandardMaterial color="#b5babb" />
@@ -439,6 +429,167 @@ function SolarArray({ position }) {
           side={THREE.DoubleSide}
         />
       </mesh>
+    </group>
+  );
+}
+
+// ==================================================
+// NEW: WATER EXTRACTOR MODEL
+// ==================================================
+
+function WaterExtractor({ position }) {
+  return (
+    <group position={position}>
+      {/* Reinforced concrete foundation */}
+      <mesh position={[0, 0.22, 0]} castShadow receiveShadow>
+        <boxGeometry args={[6.5, 0.45, 6.5]} />
+        <meshStandardMaterial
+          color="#545b5f"
+          metalness={0.45}
+          roughness={0.75}
+        />
+      </mesh>
+
+      {/* Industrial machinery housing */}
+      <mesh position={[0, 1.35, 0]} castShadow>
+        <boxGeometry args={[4.5, 2.2, 3.7]} />
+        <meshStandardMaterial
+          color="#a5adae"
+          metalness={0.72}
+          roughness={0.4}
+        />
+      </mesh>
+
+      {/* Upper service roof */}
+      <mesh position={[0, 2.55, 0]} castShadow>
+        <boxGeometry args={[4.9, 0.25, 4.1]} />
+        <meshStandardMaterial
+          color="#3c474d"
+          metalness={0.8}
+          roughness={0.35}
+        />
+      </mesh>
+
+      {/* Control compartment */}
+      <mesh position={[0, 1.35, 1.9]}>
+        <boxGeometry args={[1.8, 1.3, 0.15]} />
+        <meshStandardMaterial
+          color="#172f42"
+          emissive="#12364b"
+          emissiveIntensity={0.35}
+          metalness={0.4}
+          roughness={0.2}
+        />
+      </mesh>
+
+      {/* Water storage tanks */}
+      {[-1.25, 1.25].map((x) => (
+        <group key={x} position={[x, 3.35, 0]}>
+          <mesh castShadow>
+            <cylinderGeometry args={[0.65, 0.65, 1.5, 24]} />
+            <meshStandardMaterial
+              color="#77a9b9"
+              metalness={0.8}
+              roughness={0.3}
+            />
+          </mesh>
+
+          <mesh position={[0, 0.8, 0]}>
+            <sphereGeometry args={[0.65, 20, 12]} />
+            <meshStandardMaterial
+              color="#a8cbd2"
+              metalness={0.7}
+              roughness={0.3}
+            />
+          </mesh>
+
+          {[-0.5, 0.5].map((y) => (
+            <mesh key={y} position={[0, y, 0]}>
+              <torusGeometry args={[0.66, 0.07, 8, 24]} />
+              <meshStandardMaterial
+                color="#445a63"
+                metalness={0.85}
+              />
+            </mesh>
+          ))}
+        </group>
+      ))}
+
+      {/* Drill assembly */}
+      <group position={[-2.8, 0, -1]}>
+        <mesh position={[0, 2.4, 0]} castShadow>
+          <cylinderGeometry args={[0.23, 0.23, 4.5, 16]} />
+          <meshStandardMaterial
+            color="#8d989d"
+            metalness={0.85}
+            roughness={0.3}
+          />
+        </mesh>
+
+        <mesh position={[0, 4.75, 0]} castShadow>
+          <cylinderGeometry args={[0.5, 0.3, 0.65, 16]} />
+          <meshStandardMaterial
+            color="#d29a55"
+            metalness={0.65}
+          />
+        </mesh>
+
+        <mesh position={[0, 0.55, 0]} castShadow>
+          <cylinderGeometry args={[0.75, 0.75, 0.5, 16]} />
+          <meshStandardMaterial
+            color="#4c5559"
+            metalness={0.75}
+          />
+        </mesh>
+      </group>
+
+      {/* Pipework */}
+      <mesh
+        position={[2.55, 1.2, 0]}
+        rotation={[Math.PI / 2, 0, 0]}
+        castShadow
+      >
+        <cylinderGeometry args={[0.24, 0.24, 5.2, 16]} />
+        <meshStandardMaterial
+          color="#5d91a5"
+          metalness={0.75}
+          roughness={0.3}
+        />
+      </mesh>
+
+      <mesh
+        position={[2.55, 1.2, -2.5]}
+        rotation={[0, 0, Math.PI / 2]}
+        castShadow
+      >
+        <cylinderGeometry args={[0.24, 0.24, 2.2, 16]} />
+        <meshStandardMaterial
+          color="#5d91a5"
+          metalness={0.75}
+          roughness={0.3}
+        />
+      </mesh>
+
+      {/* Warning light */}
+      <mesh position={[2, 3.1, 1.4]}>
+        <sphereGeometry args={[0.17, 12, 12]} />
+        <meshStandardMaterial
+          color="#ffb54a"
+          emissive="#ff9c29"
+          emissiveIntensity={1.8}
+        />
+      </mesh>
+
+      {/* Equipment vents */}
+      {[-1, 0, 1].map((x) => (
+        <mesh key={x} position={[x, 1.4, -1.91]}>
+          <boxGeometry args={[0.55, 1.1, 0.08]} />
+          <meshStandardMaterial
+            color="#283a43"
+            metalness={0.6}
+          />
+        </mesh>
+      ))}
     </group>
   );
 }
@@ -514,19 +665,32 @@ function WorldScene({
 
       <MarsGround onPlace={onPlace} onHover={onHover} />
 
-      {buildings.map((building) =>
-        building.type === "solar" ? (
-          <SolarArray
-            key={building.id}
-            position={building.position}
-          />
-        ) : (
+      {buildings.map((building) => {
+        if (building.type === "solar") {
+          return (
+            <SolarArray
+              key={building.id}
+              position={building.position}
+            />
+          );
+        }
+
+        if (building.type === "extractor") {
+          return (
+            <WaterExtractor
+              key={building.id}
+              position={building.position}
+            />
+          );
+        }
+
+        return (
           <Habitat
             key={building.id}
             position={building.position}
           />
-        )
-      )}
+        );
+      })}
 
       {placementMode && (
         <PlacementMarker
@@ -564,19 +728,50 @@ function WorldScene({
 }
 
 // ==================================================
-// ECONOMY HELPERS
+// ECONOMY
 // ==================================================
 
-function getPowerBalance(buildings) {
-  const solar = buildings.filter(
-    (building) => building.type === "solar"
-  ).length;
-
+function getProduction(buildings) {
   const habitats = buildings.filter(
     (building) => building.type === "habitat"
   ).length;
 
-  return solar * 24 - habitats * 6;
+  const solar = buildings.filter(
+    (building) => building.type === "solar"
+  ).length;
+
+  const extractors = buildings.filter(
+    (building) => building.type === "extractor"
+  ).length;
+
+  return {
+    energy: solar * 24 - habitats * 6 - extractors * 8,
+    water: extractors * 15,
+  };
+}
+
+function advanceEconomy(resources, production, extractorCount) {
+  const energyBefore = resources.energy;
+  const energyAfter = Math.max(
+    0,
+    Math.min(MAX_ENERGY, energyBefore + production.energy)
+  );
+
+  // Extractors operate only if the colony can meet the
+  // energy demand for this Sol. Solar output is available
+  // during the same Sol.
+  const operatingEnergy =
+    energyBefore + production.energy >= 0;
+
+  const waterProduced = operatingEnergy
+    ? extractorCount * 15
+    : 0;
+
+  return {
+    ...resources,
+    energy: energyAfter,
+    water: Math.min(MAX_WATER, resources.water + waterProduced),
+  };
 }
 
 function canAfford(resources, cost) {
@@ -586,18 +781,25 @@ function canAfford(resources, cost) {
 }
 
 function hasCollision(buildings, type, x, z) {
-  const newMinimum = type === "solar" ? 13 : 8;
+  const newBuilding = BUILDINGS.find(
+    (building) => building.id === type
+  );
+
+  const newRadius = newBuilding?.radius ?? 8;
 
   return buildings.some((building) => {
     const dx = building.position[0] - x;
     const dz = building.position[2] - z;
 
-    const existingMinimum =
-      building.type === "solar" ? 13 : 8;
+    const existing = BUILDINGS.find(
+      (item) => item.id === building.type
+    );
+
+    const existingRadius = existing?.radius ?? 8;
 
     return (
       Math.sqrt(dx * dx + dz * dz) <
-      Math.max(newMinimum, existingMinimum)
+      Math.max(newRadius, existingRadius)
     );
   });
 }
@@ -627,13 +829,7 @@ const labelStyle = {
 // ==================================================
 
 export default function MarsWorld() {
-  const [buildings, setBuildings] = useState([
-    {
-      id: 1,
-      type: "habitat",
-      position: [0, terrainHeight(0, 0), 0],
-    },
-  ]);
+  const [buildings, setBuildings] = useState(initialBuildings);
 
   const [resources, setResources] = useState({
     ...INITIAL_RESOURCES,
@@ -645,23 +841,27 @@ export default function MarsWorld() {
     useState("habitat");
   const [placementMode, setPlacementMode] = useState(false);
   const [hoveredPosition, setHoveredPosition] = useState(null);
+
   const [message, setMessage] = useState(
-    "Colony initialized. Select a building to begin construction."
+    "Colony initialized. Water extraction systems available."
   );
 
   const selectedBuildingData = BUILDINGS.find(
     (building) => building.id === selectedBuilding
   );
 
-  const habitatCount = buildings.filter(
-    (building) => building.type === "habitat"
-  ).length;
+  const counts = useMemo(() => {
+    return {
+      habitat: buildings.filter((b) => b.type === "habitat").length,
+      solar: buildings.filter((b) => b.type === "solar").length,
+      extractor: buildings.filter((b) => b.type === "extractor").length,
+    };
+  }, [buildings]);
 
-  const solarCount = buildings.filter(
-    (building) => building.type === "solar"
-  ).length;
-
-  const powerBalance = getPowerBalance(buildings);
+  const production = useMemo(
+    () => getProduction(buildings),
+    [buildings]
+  );
 
   const validPlacement =
     hoveredPosition !== null &&
@@ -673,7 +873,7 @@ export default function MarsWorld() {
     );
 
   // ----------------------------------------------
-  // SOL SIMULATION
+  // AUTOMATIC SOL CYCLE
   // ----------------------------------------------
 
   useEffect(() => {
@@ -682,20 +882,20 @@ export default function MarsWorld() {
     const interval = setInterval(() => {
       setSol((previous) => previous + 1);
 
-      setResources((previous) => ({
-        ...previous,
-        energy: Math.max(
-          0,
-          Math.min(MAX_ENERGY, previous.energy + powerBalance)
-        ),
-      }));
+      setResources((previous) =>
+        advanceEconomy(
+          previous,
+          production,
+          counts.extractor
+        )
+      );
     }, SOL_DURATION);
 
     return () => clearInterval(interval);
-  }, [paused, powerBalance]);
+  }, [paused, production, counts.extractor]);
 
   // ----------------------------------------------
-  // BUILDING SELECTION
+  // CONSTRUCTION SELECTION
   // ----------------------------------------------
 
   function chooseBuilding(building) {
@@ -711,13 +911,14 @@ export default function MarsWorld() {
     setSelectedBuilding(building.id);
     setPlacementMode(true);
     setHoveredPosition(null);
+
     setMessage(
       `Placing ${building.name}. Click an available location on Mars.`
     );
   }
 
   // ----------------------------------------------
-  // PLACEMENT HOVER
+  // PLACEMENT
   // ----------------------------------------------
 
   function handleHover(x, z) {
@@ -732,10 +933,6 @@ export default function MarsWorld() {
       snappedZ,
     ]);
   }
-
-  // ----------------------------------------------
-  // CONSTRUCTION
-  // ----------------------------------------------
 
   function handlePlace(x, z) {
     if (!placementMode || !selectedBuildingData) return;
@@ -752,7 +949,7 @@ export default function MarsWorld() {
       )
     ) {
       setMessage(
-        "Construction blocked: too close to an existing structure."
+        "Construction blocked: too close to another structure."
       );
       return;
     }
@@ -794,26 +991,22 @@ export default function MarsWorld() {
   }
 
   // ----------------------------------------------
-  // ADVANCE SOL
+  // MANUAL SOL
   // ----------------------------------------------
 
   function advanceSol() {
     setSol((previous) => previous + 1);
 
-    setResources((previous) => ({
-      ...previous,
-      energy: Math.max(
-        0,
-        Math.min(MAX_ENERGY, previous.energy + powerBalance)
-      ),
-    }));
+    setResources((previous) =>
+      advanceEconomy(
+        previous,
+        production,
+        counts.extractor
+      )
+    );
 
     setMessage("One Martian Sol completed.");
   }
-
-  // ----------------------------------------------
-  // RESOURCE DISPLAY
-  // ----------------------------------------------
 
   const resourceItems = [
     { key: "metal", label: "METAL", icon: "◇", color: "#d1a786" },
@@ -821,6 +1014,10 @@ export default function MarsWorld() {
     { key: "water", label: "WATER", icon: "◉", color: "#79c5e9" },
     { key: "food", label: "FOOD", icon: "♧", color: "#9bd7a0" },
   ];
+
+  const projectedEnergy = resources.energy + production.energy;
+  const extractorsOperational =
+    counts.extractor > 0 && projectedEnergy >= 0;
 
   return (
     <div
@@ -858,7 +1055,7 @@ export default function MarsWorld() {
         />
       </Canvas>
 
-      {/* TOP LEFT BRANDING */}
+      {/* BRANDING */}
       <div
         style={{
           position: "absolute",
@@ -995,11 +1192,37 @@ export default function MarsWorld() {
             style={{
               fontWeight: 800,
               color:
-                powerBalance >= 0 ? "#72d7aa" : "#ff9b8d",
+                production.energy >= 0 ? "#72d7aa" : "#ff9b8d",
             }}
           >
-            {powerBalance > 0 ? "+" : ""}
-            {powerBalance}
+            {production.energy > 0 ? "+" : ""}
+            {production.energy}
+          </span>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            marginTop: 11,
+          }}
+        >
+          <span style={{ ...labelStyle, letterSpacing: 1 }}>
+            WATER / SOL
+          </span>
+
+          <span
+            style={{
+              fontWeight: 800,
+              color: extractorsOperational
+                ? "#79c5e9"
+                : "#9aa6ad",
+            }}
+          >
+            +
+            {extractorsOperational
+              ? production.water
+              : 0}
           </span>
         </div>
 
@@ -1007,11 +1230,28 @@ export default function MarsWorld() {
           style={{
             fontSize: 10,
             color: "#9aa6ad",
-            marginTop: 10,
+            marginTop: 13,
+            lineHeight: 1.7,
           }}
         >
-          {habitatCount} HABITATS · {solarCount} SOLAR ARRAYS
+          {counts.habitat} HABITATS · {counts.solar} SOLAR ARRAYS
+          <div>{counts.extractor} WATER EXTRACTORS</div>
         </div>
+
+        {counts.extractor > 0 && (
+          <div
+            style={{
+              marginTop: 10,
+              fontSize: 10,
+              color: extractorsOperational
+                ? "#72d7aa"
+                : "#ff9b8d",
+            }}
+          >
+            ● WATER SYSTEMS{" "}
+            {extractorsOperational ? "OPERATIONAL" : "POWER LIMITED"}
+          </div>
+        )}
       </div>
 
       {/* CONSTRUCTION PANEL */}
@@ -1028,12 +1268,7 @@ export default function MarsWorld() {
           boxSizing: "border-box",
         }}
       >
-        <div
-          style={{
-            ...labelStyle,
-            marginBottom: 14,
-          }}
-        >
+        <div style={{ ...labelStyle, marginBottom: 14 }}>
           01 / CONSTRUCTION
         </div>
 
