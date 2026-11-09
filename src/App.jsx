@@ -2,6 +2,12 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
 
+import { LANDING_SITES, DEFAULT_SITE } from "./game/sites";
+import {
+  generateFallbackTerrain,
+  loadSiteTerrain,
+} from "./game/terrain";
+
 const SIZE = 24;
 const TILE_W = 64;
 const TILE_H = 32;
@@ -54,33 +60,10 @@ const INITIAL_RESOURCES = {
   research: 0,
 };
 
-function makeTerrain() {
-  return Array.from({ length: SIZE }, (_, y) =>
-    Array.from({ length: SIZE }, (_, x) => {
-      const noise =
-        Math.sin(x * 0.43) * 0.45 +
-        Math.cos(y * 0.37) * 0.35 +
-        Math.sin((x + y) * 0.21) * 0.2;
-
-      return {
-        height: Math.round((noise + 1) * 3),
-        roughness: Math.abs(noise),
-      };
-    })
-  );
-}
-
 function rotateTile(x, y, rotation) {
   if (rotation === 1) return [SIZE - 1 - y, x];
   if (rotation === 2) return [SIZE - 1 - x, SIZE - 1 - y];
   if (rotation === 3) return [y, SIZE - 1 - x];
-  return [x, y];
-}
-
-function inverseRotateTile(x, y, rotation) {
-  if (rotation === 1) return [y, SIZE - 1 - x];
-  if (rotation === 2) return [SIZE - 1 - x, SIZE - 1 - y];
-  if (rotation === 3) return [SIZE - 1 - y, x];
   return [x, y];
 }
 
@@ -102,6 +85,7 @@ function loadGame() {
   } catch {
     console.warn("Could not load saved colony.");
   }
+
   return createInitialGame();
 }
 
@@ -109,9 +93,27 @@ export default function App() {
   const canvasRef = useRef(null);
   const dragRef = useRef(null);
   const suppressClickRef = useRef(false);
-  const cameraRef = useRef({ x: 0, y: 0, zoom: 0.85 });
 
-  const [terrain] = useState(makeTerrain);
+  const cameraRef = useRef({
+    x: 0,
+    y: 0,
+    zoom: 0.85,
+  });
+
+  const [terrain, setTerrain] = useState(
+    generateFallbackTerrain
+  );
+
+  const [terrainSource, setTerrainSource] = useState(
+    "procedural"
+  );
+
+  const [terrainLoading, setTerrainLoading] = useState(false);
+
+  const [selectedSite, setSelectedSite] = useState(
+    DEFAULT_SITE
+  );
+
   const [game, setGame] = useState(loadGame);
   const [selectedBuilding, setSelectedBuilding] = useState("solar");
   const [selectedTile, setSelectedTile] = useState(null);
@@ -120,7 +122,34 @@ export default function App() {
   const [paused, setPaused] = useState(false);
 
   const buildings = game.buildings;
+  const activeSite = LANDING_SITES[selectedSite];
 
+  // Load terrain for the selected landing site.
+  useEffect(() => {
+    let cancelled = false;
+
+    async function updateTerrain() {
+      setTerrainLoading(true);
+
+      const result = await loadSiteTerrain(activeSite);
+
+      if (!cancelled) {
+        setTerrain(result.terrain);
+        setTerrainSource(result.source);
+        setTerrainLoading(false);
+        setSelectedTile(null);
+        setMessage(`${activeSite.name} terrain loaded.`);
+      }
+    }
+
+    updateTerrain();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedSite]);
+
+  // Save colony progress.
   useEffect(() => {
     localStorage.setItem(SAVE_KEY, JSON.stringify(game));
   }, [game]);
@@ -150,10 +179,12 @@ export default function App() {
     ctx.fillRect(0, 0, rect.width, rect.height);
 
     const camera = cameraRef.current;
+
     const centerX = rect.width / 2 + camera.x;
     const centerY = rect.height / 2 + camera.y;
 
     ctx.save();
+
     ctx.translate(centerX, centerY);
     ctx.scale(camera.zoom, camera.zoom);
 
@@ -161,30 +192,41 @@ export default function App() {
     for (let sum = 0; sum <= (SIZE - 1) * 2; sum++) {
       for (let x = 0; x < SIZE; x++) {
         const y = sum - x;
+
         if (y < 0 || y >= SIZE) continue;
 
         const [rx, ry] = rotateTile(x, y, rotation);
         const tile = terrain[y][x];
 
         const px = (rx - ry) * TILE_W / 2;
-        const py = (rx + ry) * TILE_H / 2 - tile.height * 2;
+        const py =
+          (rx + ry) * TILE_H / 2 - tile.height * 2;
 
-        const shade = Math.round(105 + tile.roughness * 35);
+        const shade = Math.round(
+          105 + tile.roughness * 35
+        );
+
         const selected =
-          selectedTile?.x === x && selectedTile?.y === y;
+          selectedTile?.x === x &&
+          selectedTile?.y === y;
 
         ctx.beginPath();
+
         ctx.moveTo(px, py);
         ctx.lineTo(px + TILE_W / 2, py + TILE_H / 2);
         ctx.lineTo(px, py + TILE_H);
         ctx.lineTo(px - TILE_W / 2, py + TILE_H / 2);
+
         ctx.closePath();
 
         ctx.fillStyle = selected
           ? "#e6a45b"
-          : `rgb(${shade + 30}, ${Math.round(shade * 0.48)}, ${Math.round(shade * 0.36)})`;
+          : `rgb(${shade + 30}, ${Math.round(
+              shade * 0.48
+            )}, ${Math.round(shade * 0.36)})`;
 
         ctx.fill();
+
         ctx.strokeStyle = "rgba(25, 20, 19, 0.38)";
         ctx.lineWidth = 1;
         ctx.stroke();
@@ -197,7 +239,9 @@ export default function App() {
           const info = BUILDINGS[building.type];
 
           ctx.fillStyle = "#302923";
+
           ctx.beginPath();
+
           ctx.ellipse(
             px,
             py + TILE_H * 0.48,
@@ -207,6 +251,7 @@ export default function App() {
             0,
             Math.PI * 2
           );
+
           ctx.fill();
 
           ctx.fillStyle =
@@ -218,16 +263,19 @@ export default function App() {
             "#c28a65";
 
           ctx.beginPath();
+
           ctx.moveTo(px, py + 1);
           ctx.lineTo(px + 14, py + 8);
           ctx.lineTo(px, py + 16);
           ctx.lineTo(px - 14, py + 8);
+
           ctx.closePath();
           ctx.fill();
 
           ctx.fillStyle = "#e9e5df";
           ctx.font = "bold 17px sans-serif";
           ctx.textAlign = "center";
+
           ctx.fillText(info.icon, px, py + 7);
         }
       }
@@ -235,13 +283,24 @@ export default function App() {
 
     ctx.restore();
 
-    // Camera and map information.
+    // Map information.
     ctx.fillStyle = "rgba(255,255,255,0.55)";
     ctx.font = "11px sans-serif";
     ctx.textAlign = "left";
-    ctx.fillText("PROTOTYPE TERRAIN · NOT NASA MEASURED DATA", 18, rect.height - 18);
+
+    const sourceLabel =
+      String(terrainSource).toLowerCase().includes("mola")
+        ? "NASA MOLA ELEVATION DATA"
+        : "PROCEDURAL FALLBACK TERRAIN";
+
+    ctx.fillText(
+      sourceLabel,
+      18,
+      rect.height - 18
+    );
   }
 
+  // Resize and redraw canvas.
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -256,57 +315,58 @@ export default function App() {
 
   useEffect(() => {
     draw();
-  }, [game, selectedTile, rotation, terrain]);
+  }, [game, selectedTile, rotation, terrain, terrainSource]);
 
-  
-function screenToTile(clientX, clientY) {
-  const canvas = canvasRef.current;
-  const rect = canvas.getBoundingClientRect();
-  const camera = cameraRef.current;
+  // Convert screen coordinates into terrain coordinates.
+  function screenToTile(clientX, clientY) {
+    const canvas = canvasRef.current;
+    const rect = canvas.getBoundingClientRect();
+    const camera = cameraRef.current;
 
-  const sx =
-    (clientX - rect.left - rect.width / 2 - camera.x) /
-    camera.zoom;
+    const sx =
+      (clientX - rect.left - rect.width / 2 - camera.x) /
+      camera.zoom;
 
-  const sy =
-    (clientY - rect.top - rect.height / 2 - camera.y) /
-    camera.zoom;
+    const sy =
+      (clientY - rect.top - rect.height / 2 - camera.y) /
+      camera.zoom;
 
-  let bestTile = null;
-  let bestDistance = Infinity;
+    let bestTile = null;
+    let bestDistance = Infinity;
 
-  for (let y = 0; y < SIZE; y++) {
-    for (let x = 0; x < SIZE; x++) {
-      const [rx, ry] = rotateTile(x, y, rotation);
-      const tile = terrain[y][x];
+    for (let y = 0; y < SIZE; y++) {
+      for (let x = 0; x < SIZE; x++) {
+        const [rx, ry] = rotateTile(x, y, rotation);
+        const tile = terrain[y][x];
 
-      const px = (rx - ry) * TILE_W / 2;
-      const py =
-        (rx + ry) * TILE_H / 2 - tile.height * 2;
+        const px = (rx - ry) * TILE_W / 2;
+        const py =
+          (rx + ry) * TILE_H / 2 - tile.height * 2;
 
-      const dx = sx - px;
-      const dy = sy - (py + TILE_H / 2);
+        const dx = sx - px;
+        const dy = sy - (py + TILE_H / 2);
 
-      const insideDiamond =
-        Math.abs(dx) / (TILE_W / 2) +
-        Math.abs(dy) / (TILE_H / 2) <= 1;
+        const insideDiamond =
+          Math.abs(dx) / (TILE_W / 2) +
+          Math.abs(dy) / (TILE_H / 2) <= 1;
 
-      if (!insideDiamond) continue;
+        if (!insideDiamond) continue;
 
-      const distance = dx * dx + dy * dy;
+        const distance = dx * dx + dy * dy;
 
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestTile = { x, y };
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestTile = { x, y };
+        }
       }
     }
-  }
 
-  return bestTile;
-}
+    return bestTile;
+  }
 
   function handlePointerDown(event) {
     event.currentTarget.setPointerCapture(event.pointerId);
+
     dragRef.current = {
       x: event.clientX,
       y: event.clientY,
@@ -320,6 +380,7 @@ function screenToTile(clientX, clientY) {
     if (!dragRef.current) return;
 
     const drag = dragRef.current;
+
     const dx = event.clientX - drag.x;
     const dy = event.clientY - drag.y;
 
@@ -330,12 +391,16 @@ function screenToTile(clientX, clientY) {
     if (drag.moved) {
       cameraRef.current.x = drag.cameraX + dx;
       cameraRef.current.y = drag.cameraY + dy;
+
       draw();
     }
   }
 
   function handlePointerUp() {
-    suppressClickRef.current = Boolean(dragRef.current?.moved);
+    suppressClickRef.current = Boolean(
+      dragRef.current?.moved
+    );
+
     dragRef.current = null;
   }
 
@@ -345,7 +410,13 @@ function screenToTile(clientX, clientY) {
       return;
     }
 
-    const tile = screenToTile(event.clientX, event.clientY);
+    if (terrainLoading) return;
+
+    const tile = screenToTile(
+      event.clientX,
+      event.clientY
+    );
+
     if (!tile) return;
 
     const existing = buildings.find(
@@ -354,14 +425,21 @@ function screenToTile(clientX, clientY) {
 
     if (existing) {
       setSelectedTile(tile);
-      setMessage(`${BUILDINGS[existing.type].name} selected.`);
+
+      setMessage(
+        `${BUILDINGS[existing.type].name} selected.`
+      );
+
       return;
     }
 
     const definition = BUILDINGS[selectedBuilding];
 
-    const canAfford = Object.entries(definition.cost).every(
-      ([resource, cost]) => game.resources[resource] >= cost
+    const canAfford = Object.entries(
+      definition.cost
+    ).every(
+      ([resource, cost]) =>
+        game.resources[resource] >= cost
     );
 
     if (!canAfford) {
@@ -371,12 +449,16 @@ function screenToTile(clientX, clientY) {
 
     setGame((previous) => ({
       ...previous,
+
       resources: Object.fromEntries(
-        Object.entries(previous.resources).map(([key, value]) => [
-          key,
-          value - (definition.cost[key] || 0),
-        ])
+        Object.entries(previous.resources).map(
+          ([key, value]) => [
+            key,
+            value - (definition.cost[key] || 0),
+          ]
+        )
       ),
+
       buildings: [
         ...previous.buildings,
         {
@@ -397,7 +479,9 @@ function screenToTile(clientX, clientY) {
 
     setGame((previous) => {
       const count = (type) =>
-        previous.buildings.filter((b) => b.type === type).length;
+        previous.buildings.filter(
+          (b) => b.type === type
+        ).length;
 
       const next = { ...previous.resources };
 
@@ -408,12 +492,21 @@ function screenToTile(clientX, clientY) {
       next.research += count("research") * 5;
 
       // Basic colony consumption.
-      next.food -= Math.ceil(previous.population * 0.5);
-      next.water -= Math.ceil(previous.population * 0.25);
+      next.food -= Math.ceil(
+        previous.population * 0.5
+      );
+
+      next.water -= Math.ceil(
+        previous.population * 0.25
+      );
+
       next.energy -= count("habitat") * 2;
 
       for (const resource of Object.keys(next)) {
-        next[resource] = Math.max(0, Math.min(9999, next[resource]));
+        next[resource] = Math.max(
+          0,
+          Math.min(9999, next[resource])
+        );
       }
 
       return {
@@ -423,25 +516,40 @@ function screenToTile(clientX, clientY) {
       };
     });
 
-    setMessage(`Day ${game.day + 1} simulation complete.`);
+    setMessage(
+      `Day ${game.day + 1} simulation complete.`
+    );
   }
 
   function changeZoom(amount) {
     cameraRef.current.zoom = Math.max(
       0.45,
-      Math.min(1.8, cameraRef.current.zoom + amount)
+      Math.min(
+        1.8,
+        cameraRef.current.zoom + amount
+      )
     );
+
     draw();
   }
 
   function resetCamera() {
-    cameraRef.current = { x: 0, y: 0, zoom: 0.85 };
+    cameraRef.current = {
+      x: 0,
+      y: 0,
+      zoom: 0.85,
+    };
+
     setRotation(0);
     draw();
   }
 
   function resetColony() {
-    if (!window.confirm("Start a new colony? Your current save will be replaced.")) {
+    if (
+      !window.confirm(
+        "Start a new colony? Your current save will be replaced."
+      )
+    ) {
       return;
     }
 
@@ -463,9 +571,12 @@ function screenToTile(clientX, clientY) {
       <header className="topbar">
         <div className="brand">
           <div className="brand-mark">M</div>
+
           <div>
             <div className="brand-title">MARS</div>
-            <div className="brand-subtitle">THE NEW FRONTIER</div>
+            <div className="brand-subtitle">
+              THE NEW FRONTIER
+            </div>
           </div>
         </div>
 
@@ -476,22 +587,31 @@ function screenToTile(clientX, clientY) {
 
         <div className="day-counter">
           <span>MISSION DAY</span>
-          <strong>{game.day.toString().padStart(3, "0")}</strong>
+          <strong>
+            {game.day.toString().padStart(3, "0")}
+          </strong>
         </div>
       </header>
 
       <section className="resource-bar">
-        {Object.entries(game.resources).map(([key, value]) => (
-          <div className="resource" key={key}>
-            <span className="resource-icon">{resourceIcons[key]}</span>
-            <div>
-              <small>{key.toUpperCase()}</small>
-              <strong>{Math.floor(value)}</strong>
+        {Object.entries(game.resources).map(
+          ([key, value]) => (
+            <div className="resource" key={key}>
+              <span className="resource-icon">
+                {resourceIcons[key]}
+              </span>
+
+              <div>
+                <small>{key.toUpperCase()}</small>
+                <strong>{Math.floor(value)}</strong>
+              </div>
             </div>
-          </div>
-        ))}
+          )
+        )}
+
         <div className="resource population">
           <span className="resource-icon">♙</span>
+
           <div>
             <small>POPULATION</small>
             <strong>{game.population}</strong>
@@ -507,45 +627,77 @@ function screenToTile(clientX, clientY) {
           </div>
 
           <p className="panel-description">
-            Select a structure, then click an empty tile to construct it.
+            Select a structure, then click an empty tile
+            to construct it.
           </p>
 
           <div className="building-list">
-            {Object.entries(BUILDINGS).map(([key, item]) => (
-              <button
-                key={key}
-                className={`building-option ${selectedBuilding === key ? "active" : ""}`}
-                onClick={() => {
-                  setSelectedBuilding(key);
-                  setMessage(`${item.name} selected for construction.`);
-                }}
-              >
-                <span className="building-icon">{item.icon}</span>
-                <span className="building-info">
-                  <strong>{item.name}</strong>
-                  <small>{item.description}</small>
-                  <small className="cost">
-                    {Object.entries(item.cost)
-                      .map(([resource, amount]) => `${amount} ${resource}`)
-                      .join(" · ")}
-                  </small>
-                </span>
-              </button>
-            ))}
+            {Object.entries(BUILDINGS).map(
+              ([key, item]) => (
+                <button
+                  key={key}
+                  className={`building-option ${
+                    selectedBuilding === key ? "active" : ""
+                  }`}
+                  onClick={() => {
+                    setSelectedBuilding(key);
+
+                    setMessage(
+                      `${item.name} selected for construction.`
+                    );
+                  }}
+                >
+                  <span className="building-icon">
+                    {item.icon}
+                  </span>
+
+                  <span className="building-info">
+                    <strong>{item.name}</strong>
+
+                    <small>{item.description}</small>
+
+                    <small className="cost">
+                      {Object.entries(item.cost)
+                        .map(
+                          ([resource, amount]) =>
+                            `${amount} ${resource}`
+                        )
+                        .join(" · ")}
+                    </small>
+                  </span>
+                </button>
+              )
+            )}
           </div>
 
           <div className="sidebar-bottom">
-            <div className="panel-heading">02 / SIMULATION</div>
-            <button className="primary-button" onClick={advanceDay}>
+            <div className="panel-heading">
+              02 / SIMULATION
+            </div>
+
+            <button
+              className="primary-button"
+              onClick={advanceDay}
+              disabled={paused}
+            >
               ADVANCE ONE DAY <span>→</span>
             </button>
+
             <button
               className="secondary-button"
-              onClick={() => setPaused((value) => !value)}
+              onClick={() =>
+                setPaused((value) => !value)
+              }
             >
-              {paused ? "RESUME SIMULATION" : "PAUSE SIMULATION"}
+              {paused
+                ? "RESUME SIMULATION"
+                : "PAUSE SIMULATION"}
             </button>
-            <button className="text-button" onClick={resetColony}>
+
+            <button
+              className="text-button"
+              onClick={resetColony}
+            >
               RESET COLONY
             </button>
           </div>
@@ -553,8 +705,36 @@ function screenToTile(clientX, clientY) {
 
         <section className="map-panel">
           <div className="map-label">
-            <span>ARES PLANITIA</span>
-            <small>SECTOR 01 · COLONY SITE</small>
+            <span>{activeSite.name.toUpperCase()}</span>
+
+            <select
+              value={selectedSite}
+              onChange={(event) =>
+                setSelectedSite(event.target.value)
+              }
+              disabled={terrainLoading}
+            >
+              {Object.values(LANDING_SITES).map(
+                (site) => (
+                  <option
+                    key={site.id}
+                    value={site.id}
+                  >
+                    {site.name}
+                  </option>
+                )
+              )}
+            </select>
+
+            <small>
+              {terrainLoading
+                ? "LOADING TERRAIN..."
+                : String(terrainSource)
+                    .toLowerCase()
+                    .includes("mola")
+                  ? "NASA MOLA ELEVATION DATA"
+                  : "PROCEDURAL FALLBACK TERRAIN"}
+            </small>
           </div>
 
           <canvas
@@ -568,17 +748,36 @@ function screenToTile(clientX, clientY) {
           />
 
           <div className="map-controls">
-            <button onClick={() => changeZoom(0.12)}>+</button>
-            <button onClick={() => changeZoom(-0.12)}>−</button>
-            <button onClick={() => setRotation((r) => (r + 1) % 4)}>
+            <button
+              onClick={() => changeZoom(0.12)}
+            >
+              +
+            </button>
+
+            <button
+              onClick={() => changeZoom(-0.12)}
+            >
+              −
+            </button>
+
+            <button
+              onClick={() =>
+                setRotation((r) => (r + 1) % 4)
+              }
+            >
               ↻
             </button>
-            <button onClick={resetCamera}>⌖</button>
+
+            <button onClick={resetCamera}>
+              ⌖
+            </button>
           </div>
 
           <div className="map-footer">
             <span>CAMERA: ISOMETRIC</span>
-            <span>DRAG TO PAN · SCROLL NOT REQUIRED</span>
+            <span>
+              DRAG TO PAN · SCROLL NOT REQUIRED
+            </span>
           </div>
         </section>
 
@@ -590,11 +789,35 @@ function screenToTile(clientX, clientY) {
           <div className="inspector-card">
             <small>COLONY STATUS</small>
             <h2>Operational</h2>
-            <p>Initial settlement established. Expand infrastructure to support long-term survival.</p>
+
+            <p>
+              Initial settlement established. Expand
+              infrastructure to support long-term survival.
+            </p>
+          </div>
+
+          <div className="inspector-section">
+            <small>LANDING SITE</small>
+
+            <h3>{activeSite.name}</h3>
+
+            <p>{activeSite.region}</p>
+
+            <p>
+              {activeSite.latitude}° latitude,{" "}
+              {activeSite.longitude}° longitude
+            </p>
+
+            <p>{activeSite.description}</p>
+
+            <small>
+              DIFFICULTY: {activeSite.difficulty}
+            </small>
           </div>
 
           <div className="inspector-section">
             <small>SELECTED STRUCTURE</small>
+
             {selectedTile ? (
               <>
                 <h3>
@@ -606,10 +829,16 @@ function screenToTile(clientX, clientY) {
                     )?.type
                   ]?.name || "Terrain tile"}
                 </h3>
-                <p>Grid position: {selectedTile.x}, {selectedTile.y}</p>
+
+                <p>
+                  Grid position: {selectedTile.x},{" "}
+                  {selectedTile.y}
+                </p>
               </>
             ) : (
-              <p>Select a structure on the map to inspect it.</p>
+              <p>
+                Select a structure on the map to inspect it.
+              </p>
             )}
           </div>
 
@@ -625,15 +854,24 @@ function screenToTile(clientX, clientY) {
           </div>
 
           <div className="inspector-note">
-            <strong>PROTOTYPE BUILD</strong>
-            <p>Terrain is procedurally generated. Real Mars data integration is planned for Phase 2.</p>
+            <strong>TERRAIN DATA STATUS</strong>
+
+            <p>
+              {terrainLoading
+                ? "Loading selected landing-site terrain."
+                : String(terrainSource)
+                    .toLowerCase()
+                    .includes("mola")
+                  ? "Elevation dataset loaded. NASA MOLA source reported by dataset."
+                  : "Using procedural placeholder terrain. NASA elevation data has not yet been installed."}
+            </p>
           </div>
         </aside>
       </section>
 
       <footer className="footer">
         <span>MARS: THE NEW FRONTIER</span>
-        <span>LOCAL PROTOTYPE · PHASE 1</span>
+        <span>LOCAL PROTOTYPE · PHASE 2</span>
         <span>COLONY SIMULATION SYSTEM</span>
       </footer>
     </main>
