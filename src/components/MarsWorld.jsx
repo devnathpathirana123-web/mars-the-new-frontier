@@ -1,113 +1,1030 @@
 
-import { useEffect, useMemo, useState } from "react";
-import { Canvas } from "@react-three/fiber";
-import { OrbitControls, Stars, ContactShadows } from "@react-three/drei";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+
+import {
+  Canvas,
+  useFrame,
+  useThree,
+} from "@react-three/fiber";
+
+import { MapControls, Stars } from "@react-three/drei";
 import * as THREE from "three";
 
-// ==================================================
+import DetailedHabitatModel from "./buildings/HabitatModel";
+import DetailedGreenhouseModel from "./buildings/GreenhouseModel";
+import DetailedSolarModel from "./buildings/SolarModel";
+import DetailedWaterModel from "./buildings/WaterModel";
+import DetailedMineModel from "./buildings/MineModel";
+import DetailedResearchModel from "./buildings/ResearchModel";
+
+// =====================================================
 // MARS: THE NEW FRONTIER
-// PHASE 3 — WATER EXTRACTION
-// ==================================================
+// PHASE 6 — COLONY INFRASTRUCTURE
+// =====================================================
+
+const SAVE_KEY = "mars-new-frontier-save-v2";
+const SAVE_VERSION = 2;
 
 const SOL_DURATION = 5000;
-const GRID_SIZE = 8;
-const MAX_ENERGY = 300;
-const MAX_WATER = 500;
+const GRID = 8;
 
-const BUILDINGS = [
+// Each building reserves a square construction plot.
+const BUILDING_PLOT = 7.5;
+
+// =====================================================
+// TERRITORY EXPANSION
+// =====================================================
+
+const EXPANSION_MILESTONES = [
   {
-    id: "habitat",
-    name: "Habitat",
-    icon: "⌂",
-    description: "Residential module. Consumes 6 energy per Sol.",
-    status: "AVAILABLE",
-    cost: { metal: 55, energy: 12 },
-    radius: 8,
+    population: 0,
+    width: 80,
+    title: "Pioneer Outpost",
   },
   {
-    id: "solar",
-    name: "Solar Array",
-    icon: "☀",
-    description: "Generates 24 energy per Sol.",
-    status: "AVAILABLE",
-    cost: { metal: 40, energy: 8 },
-    radius: 13,
+    population: 500,
+    width: 120,
+    title: "Growing Settlement",
   },
   {
-    id: "extractor",
-    name: "Water Extractor",
-    icon: "◉",
-    description: "Produces 15 water. Consumes 8 energy per Sol.",
-    status: "AVAILABLE",
-    cost: { metal: 45, energy: 10 },
-    radius: 10,
+    population: 1500,
+    width: 170,
+    title: "Martian Town",
   },
   {
-    id: "greenhouse",
-    name: "Greenhouse",
-    icon: "♧",
-    description: "Produces food for the settlement.",
-    status: "COMING SOON",
-  },
-  {
-    id: "mine",
-    name: "Mining Facility",
-    icon: "◇",
-    description: "Extracts metals from Martian deposits.",
-    status: "COMING SOON",
-  },
-  {
-    id: "research",
-    name: "Research Lab",
-    icon: "✧",
-    description: "Develops advanced colony technology.",
-    status: "COMING SOON",
+    population: 5000,
+    width: 240,
+    title: "Major Colony",
   },
 ];
 
-const INITIAL_RESOURCES = {
-  metal: 180,
-  energy: 100,
-  water: 100,
-  food: 100,
-};
+function territoryFor(population) {
+  return [...EXPANSION_MILESTONES]
+    .reverse()
+    .find((tier) => population >= tier.population);
+}
 
-const initialBuildings = [
-  {
-    id: 1,
-    type: "habitat",
-    position: [0, terrainHeight(0, 0), 0],
-  },
-];
+// =====================================================
+// CONSTRUCTION COLLISION SYSTEM
+// =====================================================
 
-// ==================================================
-// TERRAIN
-// ==================================================
+function footprintCollision(
+  buildings,
+  x,
+  z,
+  ignoreId = null
+) {
+  return buildings.some((building) => {
+    if (building.id === ignoreId) {
+      return false;
+    }
 
-function terrainHeight(x, z) {
+    const overlapX =
+      Math.abs(building.x - x) < BUILDING_PLOT;
+
+    const overlapZ =
+      Math.abs(building.z - z) < BUILDING_PLOT;
+
+    return overlapX && overlapZ;
+  });
+}
+
+function insideTerritory(x, z, population) {
+  const territory = territoryFor(population);
+  const half = territory.width / 2;
+  const margin = BUILDING_PLOT / 2;
+
   return (
-    Math.sin(x * 0.07) * 0.45 +
-    Math.cos(z * 0.06) * 0.35 +
-    Math.sin((x + z) * 0.035) * 0.25 -
-    0.35
+    Math.abs(x) + margin <= half &&
+    Math.abs(z) + margin <= half
   );
 }
 
-function snapToGrid(value) {
-  return Math.round(value / GRID_SIZE) * GRID_SIZE;
+// =====================================================
+// CITIZEN SATISFACTION FRAMEWORK
+// =====================================================
+
+function calculateSatisfaction(game) {
+  const population = game.colony.population;
+
+  const housingCapacity = game.buildings
+    .filter((building) => building.type === "habitat")
+    .reduce(
+      (total, building) =>
+        total + HOUSING[building.level],
+      0
+    );
+
+  const housing = population
+    ? Math.min(
+        100,
+        Math.round(
+          (100 * housingCapacity) / population
+        )
+      )
+    : 100;
+
+  const essentials = population
+    ? Math.min(
+        100,
+        Math.round(
+          (100 *
+            Math.min(
+              game.resources.food,
+              game.resources.water
+            )) /
+            population
+        )
+      )
+    : 100;
+
+  const solarProduction = game.buildings
+    .filter((building) => building.type === "solar")
+    .reduce(
+      (total, building) =>
+        total + output(building, game.technologies),
+      0
+    );
+
+  const energyDemand = game.buildings.reduce(
+    (total, building) =>
+      total + energyCost(building),
+    0
+  );
+
+  const energy = energyDemand
+    ? Math.min(
+        100,
+        Math.round(
+          (100 * solarProduction) / energyDemand
+        )
+      )
+    : 100;
+
+  const indicators = [
+    {
+      id: "housing",
+      label: "Housing quality",
+      value: housing,
+      implemented: true,
+    },
+    {
+      id: "essentials",
+      label: "Food & water security",
+      value: essentials,
+      implemented: true,
+    },
+    {
+      id: "energy",
+      label: "Energy reliability",
+      value: energy,
+      implemented: true,
+    },
+    {
+      id: "healthcare",
+      label: "Healthcare",
+      value: null,
+      implemented: false,
+    },
+    {
+      id: "recreation",
+      label: "Recreation & community",
+      value: null,
+      implemented: false,
+    },
+  ];
+
+  const active = indicators.filter(
+    (indicator) => indicator.implemented
+  );
+
+  const overall = Math.round(
+    active.reduce(
+      (total, indicator) =>
+        total + indicator.value,
+      0
+    ) / active.length
+  );
+
+  return {
+    indicators,
+    overall,
+  };
 }
 
-function MarsGround({ onPlace, onHover }) {
+const START_RESOURCES = {
+  metal: 600,
+  energy: 300,
+  water: 200,
+  food: 200,
+  research: 0,
+};
+
+const LIMITS = {
+  metal: 10000,
+  energy: 6000,
+  water: 6000,
+  food: 6000,
+  research: 10000,
+};
+
+const CATALOG = {
+  habitat: {
+    name: "Habitat",
+    icon: "⌂",
+    max: 15,
+    cost: { metal: 55, energy: 12 },
+    base: 8,
+  },
+  solar: {
+    name: "Solar Array",
+    icon: "☀",
+    max: 10,
+    cost: { metal: 40, energy: 8 },
+    base: 24,
+  },
+  extractor: {
+    name: "Water Plant",
+    icon: "◉",
+    max: 15,
+    cost: { metal: 45, energy: 10 },
+    base: 15,
+  },
+  greenhouse: {
+    name: "Greenhouse",
+    icon: "♧",
+    max: 10,
+    cost: { metal: 50, energy: 12 },
+    base: 12,
+  },
+  mine: {
+    name: "Mining Facility",
+    icon: "◇",
+    max: 15,
+    cost: { metal: 65, energy: 15 },
+    base: 18,
+  },
+  research: {
+    name: "Research Centre",
+    icon: "✧",
+    max: 15,
+    cost: { metal: 70, energy: 18 },
+    base: 8,
+  },
+};
+
+const TECHNOLOGIES = [
+  {
+    id: "solarEfficiency",
+    name: "Solar Efficiency",
+    description: "Increase solar power production.",
+    cost: 100,
+  },
+  {
+    id: "waterRecycling",
+    name: "Water Recycling",
+    description: "Increase water extraction output.",
+    cost: 150,
+  },
+  {
+    id: "agriculture",
+    name: "Advanced Agriculture",
+    description: "Improve greenhouse food production.",
+    cost: 200,
+  },
+  {
+    id: "mining",
+    name: "Automated Mining",
+    description: "Increase metal production.",
+    cost: 250,
+  },
+  {
+    id: "research",
+    name: "Research Optimization",
+    description: "Increase research point production.",
+    cost: 300,
+  },
+];
+
+const HOUSING = [
+  0, 8, 12, 18, 26, 36, 48, 64,
+  82, 104, 130, 160, 195, 235, 280, 340,
+];
+
+const FOOD = [
+  0, 12, 24, 36, 55, 75,
+  105, 135, 170, 210, 260,
+];
+
+const PANEL = {
+  background: "rgba(11, 18, 27, 0.94)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  borderRadius: 14,
+  padding: 18,
+};
+
+const BUTTON = {
+  padding: "10px 14px",
+  borderRadius: 8,
+  border: "1px solid rgba(255,255,255,0.14)",
+  background: "#263849",
+  color: "#ffffff",
+  cursor: "pointer",
+  fontWeight: 700,
+};
+
+function freshGame(mode) {
+  return {
+    version: SAVE_VERSION,
+    mode,
+    sol: 1,
+    paused: false,
+    sandboxSurvival: false,
+
+    resources: { ...START_RESOURCES },
+
+    colony: {
+      population: 4,
+      health: 100,
+      stableSols: 0,
+    },
+
+    technologies: {
+      solarEfficiency: false,
+      waterRecycling: false,
+      agriculture: false,
+      mining: false,
+      research: false,
+    },
+
+    buildings: [
+      {
+        id: 1,
+        type: "habitat",
+        level: 1,
+        x: 0,
+        z: 0,
+      },
+    ],
+
+    nextId: 2,
+  };
+}
+
+ // =====================================================
+ // PHASE 6 — SAVE SYSTEM AND VALIDATION
+ // =====================================================
+
+function validateSave(data) {
+  if (!data || typeof data !== "object") {
+    return null;
+  }
+
+  if (data.version !== SAVE_VERSION) {
+    return null;
+  }
+
+  if (!["survival", "sandbox"].includes(data.mode)) {
+    return null;
+  }
+
+  const defaults = freshGame(data.mode);
+
+  if (
+    !data.resources ||
+    !data.colony ||
+    !data.technologies ||
+    !Array.isArray(data.buildings)
+  ) {
+    return null;
+  }
+
+  const validNumber = (value, min, max) =>
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    value >= min &&
+    value <= max;
+
+  const resources = {};
+
+  for (const [key, limit] of Object.entries(LIMITS)) {
+    const value = data.resources[key];
+
+    if (!validNumber(value, 0, limit)) {
+      return null;
+    }
+
+    resources[key] = value;
+  }
+
+  const population = data.colony.population;
+  const health = data.colony.health;
+  const stableSols = data.colony.stableSols;
+
+  if (
+    !validNumber(population, 0, 1000000) ||
+    !validNumber(health, 0, 100) ||
+    !validNumber(stableSols, 0, 1000000)
+  ) {
+    return null;
+  }
+
+  const buildings = [];
+  const usedIds = new Set();
+
+  for (const building of data.buildings) {
+    if (!building || typeof building !== "object") {
+      return null;
+    }
+
+    const definition = CATALOG[building.type];
+
+    if (!definition) {
+      return null;
+    }
+
+    if (
+      !Number.isInteger(building.id) ||
+      building.id < 1 ||
+      usedIds.has(building.id)
+    ) {
+      return null;
+    }
+
+    if (
+      !Number.isInteger(building.level) ||
+      building.level < 1 ||
+      building.level > definition.max
+    ) {
+      return null;
+    }
+
+    if (
+      !validNumber(building.x, -160, 160) ||
+      !validNumber(building.z, -160, 160)
+    ) {
+      return null;
+    }
+
+    usedIds.add(building.id);
+
+    buildings.push({
+      id: building.id,
+      type: building.type,
+      level: building.level,
+      x: building.x,
+      z: building.z,
+    });
+  }
+
+  const technologies = {
+    ...defaults.technologies,
+  };
+
+  for (const key of Object.keys(technologies)) {
+    if (typeof data.technologies[key] === "boolean") {
+      technologies[key] = data.technologies[key];
+    }
+  }
+
+  const highestId = Math.max(
+    0,
+    ...buildings.map((building) => building.id)
+  );
+
+  const nextId =
+    Number.isInteger(data.nextId) &&
+    data.nextId > highestId
+      ? data.nextId
+      : highestId + 1;
+
+  return {
+    version: SAVE_VERSION,
+    mode: data.mode,
+
+    sol:
+      Number.isInteger(data.sol) && data.sol >= 1
+        ? data.sol
+        : 1,
+
+    paused: Boolean(data.paused),
+
+    sandboxSurvival: Boolean(data.sandboxSurvival),
+
+    resources,
+
+    colony: {
+      population,
+      health,
+      stableSols,
+    },
+
+    technologies,
+
+    buildings,
+
+    nextId,
+  };
+}
+
+function loadSavedGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+
+    if (!raw) {
+      return null;
+    }
+
+    return validateSave(JSON.parse(raw));
+  } catch (error) {
+    console.warn("Unable to load Mars colony:", error);
+    return null;
+  }
+}
+
+function saveGame(game) {
+  try {
+    localStorage.setItem(
+      SAVE_KEY,
+      JSON.stringify({
+        ...game,
+        version: SAVE_VERSION,
+      })
+    );
+
+    return true;
+  } catch (error) {
+    console.error("Unable to save Mars colony:", error);
+    return false;
+  }
+}
+
+function deleteSavedGame() {
+  try {
+    localStorage.removeItem(SAVE_KEY);
+    return true;
+  } catch (error) {
+    console.error("Unable to delete Mars colony:", error);
+    return false;
+  }
+}
+
+ // =====================================================
+ // PHASE 6 — RESOURCE ECONOMY
+ // =====================================================
+
+
+
+function output(building, technologies) {
+  if (building.type === "habitat") {
+    return HOUSING[building.level];
+  }
+
+  let amount =
+    building.type === "greenhouse"
+      ? FOOD[building.level]
+      : Math.floor(
+          CATALOG[building.type].base *
+            (1 + (building.level - 1) * 0.35)
+        );
+
+  const researchBonuses = {
+    solar: "solarEfficiency",
+    extractor: "waterRecycling",
+    greenhouse: "agriculture",
+    mine: "mining",
+    research: "research",
+  };
+
+  const technologyId = researchBonuses[building.type];
+
+  if (technologyId && technologies[technologyId]) {
+    amount = Math.floor(amount * 1.25);
+  }
+
+  return amount;
+}
+
+
+// =====================================================
+// ENERGY CONSUMPTION
+// =====================================================
+
+function energyCost(building) {
+  const level = building.level;
+
+  switch (building.type) {
+    case "habitat":
+      return Math.ceil(6 + (level - 1) * 3.5);
+
+    case "solar":
+      return 0;
+
+    case "extractor":
+      return Math.ceil(8 + (level - 1) * 1.5);
+
+    case "greenhouse":
+      return level <= 3 ? 10 : level <= 5 ? 16 : 24;
+
+    case "mine":
+      return Math.ceil(12 + (level - 1) * 2.5);
+
+    case "research":
+      return Math.ceil(14 + (level - 1) * 2.5);
+
+    default:
+      return 0;
+  }
+}
+
+// =====================================================
+// BUILDING UPGRADE COSTS
+// =====================================================
+
+function upgradeCost(building) {
+  const next = building.level + 1;
+  const config = CATALOG[building.type];
+
+  const milestones = {
+    habitat: [4, 7, 10, 13, 15],
+    solar: [4, 7, 9],
+    extractor: [4, 7, 11, 15],
+    greenhouse: [4, 6],
+    mine: [4, 7, 11, 15],
+    research: [4, 8, 12, 15],
+  };
+
+  const milestone =
+    milestones[building.type].includes(next);
+
+  let research = 0;
+
+  if (next >= 13) {
+    research = 90 + (next - 13) * 35;
+  } else if (next >= 10) {
+    research = 45 + (next - 10) * 15;
+  } else if (next >= 7) {
+    research = 20 + (next - 7) * 8;
+  } else if (next >= 4) {
+    research = 10;
+  }
+
+  return {
+    metal: Math.ceil(
+      config.cost.metal * (0.55 + next * 0.32) +
+        (milestone ? next * 13 : 0)
+    ),
+    research,
+  };
+}
+
+// =====================================================
+// RESOURCE TRANSACTIONS
+// =====================================================
+
+function canAfford(resources, price, sandbox) {
+  return (
+    sandbox ||
+    Object.entries(price).every(
+      ([key, amount]) => resources[key] >= amount
+    )
+  );
+}
+
+function deduct(resources, price, sandbox) {
+  if (sandbox) {
+    return resources;
+  }
+
+  const next = { ...resources };
+
+  for (const [key, amount] of Object.entries(price)) {
+    next[key] -= amount;
+  }
+
+  return next;
+}
+
+// =====================================================
+// COLONY SIMULATION — ONE MARTIAN SOL
+// =====================================================
+
+function simulateSol(game) {
+  const resources = { ...game.resources };
+  const buildings = game.buildings;
+  const technologies = game.technologies;
+
+  const ofType = (type) =>
+    buildings.filter((building) => building.type === type);
+
+  // Solar power generation
+  for (const building of ofType("solar")) {
+    resources.energy = Math.min(
+      LIMITS.energy,
+      resources.energy + output(building, technologies)
+    );
+  }
+
+  // Powered housing
+  let poweredHousing = 0;
+
+  for (const building of ofType("habitat")) {
+    const required = energyCost(building);
+
+    if (resources.energy >= required) {
+      resources.energy -= required;
+      poweredHousing += output(building, technologies);
+    }
+  }
+
+  // Water production
+  for (const building of ofType("extractor")) {
+    const required = energyCost(building);
+
+    if (resources.energy >= required) {
+      resources.energy -= required;
+
+      resources.water = Math.min(
+        LIMITS.water,
+        resources.water + output(building, technologies)
+      );
+    }
+  }
+
+  // Greenhouse production
+  for (const building of ofType("greenhouse")) {
+    const requiredEnergy = energyCost(building);
+
+    const requiredWater =
+      building.level <= 3
+        ? 8
+        : building.level <= 5
+        ? 14
+        : 22;
+
+    if (
+      resources.energy >= requiredEnergy &&
+      resources.water >= requiredWater
+    ) {
+      resources.energy -= requiredEnergy;
+      resources.water -= requiredWater;
+
+      resources.food = Math.min(
+        LIMITS.food,
+        resources.food + output(building, technologies)
+      );
+    }
+  }
+
+  // Mining and research
+  for (const type of ["mine", "research"]) {
+    for (const building of ofType(type)) {
+      const required = energyCost(building);
+      const resource =
+        type === "mine" ? "metal" : "research";
+
+      if (resources.energy >= required) {
+        resources.energy -= required;
+
+        resources[resource] = Math.min(
+          LIMITS[resource],
+          resources[resource] +
+            output(building, technologies)
+        );
+      }
+    }
+  }
+
+  // ===================================================
+  // CITIZEN CONSUMPTION
+  // ===================================================
+
+  const population = game.colony.population;
+
+  const consumedFood = Math.min(
+    resources.food,
+    population
+  );
+
+  const consumedWater = Math.min(
+    resources.water,
+    population
+  );
+
+  resources.food -= consumedFood;
+  resources.water -= consumedWater;
+
+  const housing = ofType("habitat").reduce(
+    (sum, building) =>
+      sum + HOUSING[building.level],
+    0
+  );
+
+  const supported =
+    population > 0 &&
+    consumedFood === population &&
+    consumedWater === population &&
+    poweredHousing >= population;
+
+  let health = game.colony.health;
+  let stableSols = game.colony.stableSols;
+  let nextPopulation = population;
+
+  // ===================================================
+  // POPULATION GROWTH AND HEALTH
+  // ===================================================
+
+  if (population === 0) {
+    health = 0;
+    stableSols = 0;
+  } else if (supported) {
+    health = Math.min(100, health + 3);
+    stableSols++;
+
+    if (
+      stableSols >= 5 &&
+      health >= 80 &&
+      population < housing
+    ) {
+      nextPopulation++;
+      stableSols = 0;
+    }
+  } else {
+    health = Math.max(0, health - 15);
+    stableSols = 0;
+
+    if (health === 0) {
+      nextPopulation = Math.max(
+        0,
+        nextPopulation - 1
+      );
+
+      health = nextPopulation > 0 ? 20 : 0;
+    }
+  }
+
+  // ===================================================
+  // RETURN UPDATED COLONY
+  // ===================================================
+
+  return {
+    ...game,
+    sol: game.sol + 1,
+    resources,
+
+    colony: {
+      population: nextPopulation,
+      health,
+      stableSols,
+    },
+  };
+}
+
+ // =====================================================
+ // PHASE 6 — PROCEDURAL MARS ENVIRONMENT
+ // =====================================================
+
+function hash(x, z) {
+  const n =
+    Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+
+  return n - Math.floor(n);
+}
+
+// =====================================================
+// SMOOTH PROCEDURAL NOISE
+// =====================================================
+
+function noise(x, z) {
+  const ix = Math.floor(x);
+  const iz = Math.floor(z);
+
+  const fx = x - ix;
+  const fz = z - iz;
+
+  const u = fx * fx * (3 - 2 * fx);
+  const v = fz * fz * (3 - 2 * fz);
+
+  return THREE.MathUtils.lerp(
+    THREE.MathUtils.lerp(
+      hash(ix, iz),
+      hash(ix + 1, iz),
+      u
+    ),
+    THREE.MathUtils.lerp(
+      hash(ix, iz + 1),
+      hash(ix + 1, iz + 1),
+      u
+    ),
+    v
+  );
+}
+
+// =====================================================
+// TERRAIN HEIGHT GENERATION
+// =====================================================
+
+function terrainHeight(x, z) {
+  const distance = Math.hypot(x, z);
+
+  // Preserve a relatively flat starting settlement.
+  const wilderness = THREE.MathUtils.smoothstep(
+    distance,
+    20,
+    65
+  );
+
+  let elevation = 0;
+  let amplitude = 10;
+  let frequency = 0.02;
+
+  // Multiple noise layers create natural terrain.
+  for (let i = 0; i < 5; i++) {
+    elevation +=
+      (noise(x * frequency, z * frequency) * 2 - 1) *
+      amplitude;
+
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+
+  // Elevated ridges and mountainous formations.
+  const ridges =
+    Math.pow(
+      1 -
+        Math.abs(
+          noise(
+            x * 0.018 + 12,
+            z * 0.018 - 5
+          ) * 2 - 1
+        ),
+      3
+    ) * 8;
+
+  let height =
+    (elevation + ridges - 3) * wilderness;
+
+  // Martian impact craters.
+  const craters = [
+    [-55, -40, 25, 6],
+    [65, 45, 30, 8],
+    [-80, 75, 20, 5],
+    [85, -75, 28, 7],
+  ];
+
+  for (const [
+    cx,
+    cz,
+    radius,
+    depth,
+  ] of craters) {
+    const t =
+      Math.hypot(x - cx, z - cz) / radius;
+
+    // Depression in the crater center.
+    height -=
+      depth *
+      Math.exp(-Math.pow(t / 0.72, 4));
+
+    // Raised crater rim.
+    height +=
+      depth *
+      0.4 *
+      Math.exp(
+        -Math.pow((t - 1) / 0.14, 2)
+      );
+  }
+
+  return height;
+}
+
+// =====================================================
+// TERRAIN MESH
+// =====================================================
+
+function Terrain({ onHover, onPlace }) {
   const geometry = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(300, 300, 160, 160);
+    const geo = new THREE.PlaneGeometry(
+      320,
+      320,
+      180,
+      180
+    );
+
     geo.rotateX(-Math.PI / 2);
 
     const positions = geo.attributes.position;
     const colors = [];
 
-    const low = new THREE.Color("#6d3527");
-    const mid = new THREE.Color("#a65a3c");
-    const high = new THREE.Color("#c88a60");
+    const dark = new THREE.Color("#623a2b");
+    const middle = new THREE.Color("#a76043");
+    const light = new THREE.Color("#cb9470");
 
     for (let i = 0; i < positions.count; i++) {
       const x = positions.getX(i);
@@ -116,55 +1033,87 @@ function MarsGround({ onPlace, onHover }) {
 
       positions.setY(i, y);
 
-      const color = new THREE.Color();
+      const color = middle.clone();
 
-      if (y < -0.3) {
-        color.copy(low).lerp(
-          mid,
-          THREE.MathUtils.clamp((y + 1) / 0.7, 0, 1)
+      if (y < 0) {
+        color.lerp(
+          dark,
+          THREE.MathUtils.clamp(
+            -y / 12,
+            0,
+            1
+          )
         );
       } else {
-        color.copy(mid).lerp(
-          high,
-          THREE.MathUtils.clamp((y + 0.3) / 1.3, 0, 1)
+        color.lerp(
+          light,
+          THREE.MathUtils.clamp(
+            y / 18,
+            0,
+            1
+          )
         );
       }
 
-      colors.push(color.r, color.g, color.b);
+      colors.push(
+        color.r,
+        color.g,
+        color.b
+      );
     }
 
     geo.setAttribute(
       "color",
-      new THREE.Float32BufferAttribute(colors, 3)
+      new THREE.Float32BufferAttribute(
+        colors,
+        3
+      )
     );
 
     geo.computeVertexNormals();
+
     return geo;
   }, []);
 
+  // Release GPU resources when unmounted.
   useEffect(() => {
     return () => geometry.dispose();
   }, [geometry]);
 
+  // ===================================================
+  // PROCEDURAL ROCK DISTRIBUTION
+  // ===================================================
+
   const rocks = useMemo(() => {
-    const result = [];
+    const items = [];
 
-    for (let i = 0; i < 110; i++) {
-      const x = Math.sin(i * 127.1) * 80;
-      const z = Math.cos(i * 73.7) * 80;
+    for (let i = 0; i < 220; i++) {
+      const x =
+        (hash(i, 17) - 0.5) * 290;
 
-      if (Math.abs(x) < 8 && Math.abs(z) < 8) continue;
+      const z =
+        (hash(i, 39) - 0.5) * 290;
 
-      result.push({
+      // Keep the starting area clear.
+      if (Math.hypot(x, z) < 24) {
+        continue;
+      }
+
+      items.push({
         id: i,
-        position: [x, terrainHeight(x, z) + 0.15, z],
-        scale: 0.25 + ((i * 17) % 10) * 0.07,
-        rotation: i * 1.3,
+        x,
+        z,
+        size:
+          0.3 + hash(i, 71) * 1.3,
       });
     }
 
-    return result;
+    return items;
   }, []);
+
+  // ===================================================
+  // RENDER MARTIAN SURFACE
+  // ===================================================
 
   return (
     <group>
@@ -173,1300 +1122,2324 @@ function MarsGround({ onPlace, onHover }) {
         receiveShadow
         onPointerMove={(event) => {
           event.stopPropagation();
-          onHover(event.point.x, event.point.z);
+
+          onHover(
+            event.point.x,
+            event.point.z
+          );
         }}
         onClick={(event) => {
           event.stopPropagation();
-          onPlace(event.point.x, event.point.z);
+          // Ignore clicks caused by camera dragging.
+          if (event.delta > 5) {
+           return;
+          }
+
+          onPlace(
+            event.point.x,
+            event.point.z
+          );
         }}
       >
-        <meshStandardMaterial vertexColors roughness={1} />
+        <meshStandardMaterial
+          vertexColors
+          roughness={1}
+        />
       </mesh>
 
       {rocks.map((rock) => (
         <mesh
           key={rock.id}
-          position={rock.position}
-          scale={rock.scale}
-          rotation={[0.2, rock.rotation, 0.1]}
+          position={[
+            rock.x,
+            terrainHeight(
+              rock.x,
+              rock.z
+            ) + rock.size * 0.25,
+            rock.z,
+          ]}
+          scale={[
+            rock.size,
+            rock.size * 0.65,
+            rock.size * 0.8,
+          ]}
+          rotation={[
+            0.2,
+            rock.id,
+            0.1,
+          ]}
           castShadow
         >
-          <dodecahedronGeometry args={[1, 0]} />
-          <meshStandardMaterial color="#754534" roughness={1} />
+          <dodecahedronGeometry
+            args={[1, 0]}
+          />
+
+          <meshStandardMaterial
+            color={
+              rock.id % 3 === 0
+                ? "#684638"
+                : "#89604a"
+            }
+            roughness={1}
+          />
         </mesh>
       ))}
     </group>
   );
 }
 
-// ==================================================
-// HABITAT MODEL
-// ==================================================
+ // =====================================================
+ // PHASE 6 — BUILDING ARCHITECTURE
+ // =====================================================
 
-function Habitat({ position }) {
+const MODELS = {
+  habitat: DetailedHabitatModel,
+  solar: DetailedSolarModel,
+  extractor: DetailedWaterModel,
+  greenhouse: DetailedGreenhouseModel,
+  mine: DetailedMineModel,
+  research: DetailedResearchModel,
+};
+
+// =====================================================
+// COMPACT BUILDING FITTING SYSTEM
+// =====================================================
+
+function CompactBuildingModel({ Model, level }) {
+  const modelRoot = useRef(null);
+  const fitRoot = useRef(null);
+
+  useLayoutEffect(() => {
+    const root = modelRoot.current;
+    const fit = fitRoot.current;
+    if (!root || !fit) return;
+
+    // Measure at unit scale before applying any fitting transforms.
+    fit.scale.set(1, 1, 1);
+    root.position.set(0, 0, 0);
+    fit.updateWorldMatrix(true, true);
+
+    const bounds = new THREE.Box3().setFromObject(root);
+    if (bounds.isEmpty()) return;
+
+    // Box3 is WORLD-space. Convert its center and base to the
+    // fitting group's LOCAL space before moving the model.
+    const worldCenter = bounds.getCenter(new THREE.Vector3());
+    const localCenter = fit.worldToLocal(worldCenter.clone());
+    const localBottom = fit.worldToLocal(
+      new THREE.Vector3(worldCenter.x, bounds.min.y, worldCenter.z)
+    );
+    const size = bounds.getSize(new THREE.Vector3());
+    const maxHorizontal = Math.max(size.x, size.z, 0.001);
+    const factor = Math.min(
+      0.525,
+      (BUILDING_PLOT - 0.6) / maxHorizontal
+    ) * 1.62;
+
+    root.position.set(-localCenter.x, -localBottom.y, -localCenter.z);
+    fit.scale.setScalar(factor);
+  }, [Model, level]);
+
   return (
-    <group position={position}>
-      <mesh position={[0, 0.18, 0]} receiveShadow castShadow>
-        <boxGeometry args={[6.4, 0.35, 4.4]} />
-        <meshStandardMaterial
-          color="#4a4d50"
-          metalness={0.65}
-          roughness={0.5}
-        />
-      </mesh>
-
-      <mesh
-        position={[0, 1.9, 0]}
-        rotation={[0, 0, Math.PI / 2]}
-        castShadow
-      >
-        <cylinderGeometry args={[1.55, 1.55, 5.2, 32]} />
-        <meshStandardMaterial
-          color="#d5d8d7"
-          metalness={0.65}
-          roughness={0.32}
-        />
-      </mesh>
-
-      {[-2.6, 2.6].map((x) => (
-        <mesh key={x} position={[x, 1.9, 0]} castShadow>
-          <sphereGeometry args={[1.55, 24, 16]} />
-          <meshStandardMaterial
-            color="#b9bfc0"
-            metalness={0.65}
-            roughness={0.38}
-          />
-        </mesh>
-      ))}
-
-      {[-1.9, 0, 1.9].map((x) => (
-        <mesh
-          key={x}
-          position={[x, 1.9, 0]}
-          rotation={[0, 0, Math.PI / 2]}
-          castShadow
-        >
-          <torusGeometry args={[1.57, 0.12, 12, 40]} />
-          <meshStandardMaterial
-            color="#60696e"
-            metalness={0.85}
-            roughness={0.3}
-          />
-        </mesh>
-      ))}
-
-      {[-1.6, 0, 1.6].map((x) => (
-        <group key={x}>
-          {[1, -1].map((side) => (
-            <mesh
-              key={side}
-              position={[x, 2.35, side * 1.43]}
-            >
-              <boxGeometry args={[0.85, 0.52, 0.09]} />
-              <meshStandardMaterial
-                color="#122c42"
-                emissive="#17436a"
-                emissiveIntensity={0.35}
-                metalness={0.7}
-                roughness={0.18}
-              />
-            </mesh>
-          ))}
-        </group>
-      ))}
-
-      <mesh position={[0, 1.35, 1.75]} castShadow>
-        <boxGeometry args={[1.5, 1.85, 0.75]} />
-        <meshStandardMaterial
-          color="#737d83"
-          metalness={0.75}
-          roughness={0.35}
-        />
-      </mesh>
-
-      <mesh position={[0, 1.35, 2.15]}>
-        <boxGeometry args={[0.9, 1.4, 0.08]} />
-        <meshStandardMaterial color="#263d4b" metalness={0.6} />
-      </mesh>
-
-      {[-2.2, 2.2].map((x) =>
-        [-1.5, 1.5].map((z) => (
-          <mesh
-            key={`${x}-${z}`}
-            position={[x, 0.55, z]}
-            castShadow
-          >
-            <boxGeometry args={[0.35, 1.1, 0.35]} />
-            <meshStandardMaterial color="#535a5e" />
-          </mesh>
-        ))
-      )}
-
-      <mesh position={[1.1, 3.5, 0]} castShadow>
-        <boxGeometry args={[1.2, 0.3, 0.8]} />
-        <meshStandardMaterial color="#59636a" metalness={0.7} />
-      </mesh>
-
-      <mesh position={[-1.4, 3.6, 0]} castShadow>
-        <cylinderGeometry args={[0.06, 0.06, 1.2, 8]} />
-        <meshStandardMaterial color="#c2c8c9" />
-      </mesh>
-
-      {[-1, 1].map((side) => (
-        <group key={side} position={[0, 1.1, side * 3.2]}>
-          <mesh rotation={[-0.12 * side, 0, 0]} castShadow>
-            <boxGeometry args={[3.8, 0.12, 1.5]} />
-            <meshStandardMaterial
-              color="#153c62"
-              metalness={0.6}
-              roughness={0.2}
-            />
-          </mesh>
-
-          {[-1.2, 0, 1.2].map((x) => (
-            <mesh
-              key={x}
-              position={[x, 0.08, 0]}
-              rotation={[-0.12 * side, 0, 0]}
-            >
-              <boxGeometry args={[0.035, 0.025, 1.5]} />
-              <meshBasicMaterial color="#8ca9bd" />
-            </mesh>
-          ))}
-        </group>
-      ))}
-    </group>
-  );
-}
-
-// ==================================================
-// SOLAR ARRAY MODEL
-// ==================================================
-
-function SolarArray({ position }) {
-  return (
-    <group position={position}>
-      <mesh position={[0, 0.25, 0]} castShadow>
-        <boxGeometry args={[3.4, 0.5, 3.4]} />
-        <meshStandardMaterial
-          color="#4b5155"
-          metalness={0.7}
-          roughness={0.45}
-        />
-      </mesh>
-
-      <mesh position={[0, 1.1, 0]} castShadow>
-        <boxGeometry args={[1.5, 1.2, 1.5]} />
-        <meshStandardMaterial
-          color="#a5abad"
-          metalness={0.75}
-          roughness={0.35}
-        />
-      </mesh>
-
-      {[-1, 1].map((side) => (
-        <group key={side} position={[side * 4.3, 1.75, 0]}>
-          <mesh rotation={[0, 0, side * -0.12]} castShadow>
-            <boxGeometry args={[5.5, 0.14, 3.8]} />
-            <meshStandardMaterial
-              color="#0c3156"
-              metalness={0.65}
-              roughness={0.2}
-            />
-          </mesh>
-
-          {[-2, -1, 0, 1, 2].map((x) => (
-            <mesh
-              key={x}
-              position={[x, 0.09, 0]}
-              rotation={[0, 0, side * -0.12]}
-            >
-              <boxGeometry args={[0.04, 0.025, 3.8]} />
-              <meshBasicMaterial color="#7896ae" />
-            </mesh>
-          ))}
-
-          {[-1, 0, 1].map((z) => (
-            <mesh
-              key={z}
-              position={[0, 0.1, z * 1.1]}
-              rotation={[0, 0, side * -0.12]}
-            >
-              <boxGeometry args={[5.5, 0.025, 0.04]} />
-              <meshBasicMaterial color="#7896ae" />
-            </mesh>
-          ))}
-
-          <mesh position={[0, -0.8, 0]} castShadow>
-            <cylinderGeometry args={[0.11, 0.11, 1.6, 12]} />
-            <meshStandardMaterial color="#777f82" />
-          </mesh>
-        </group>
-      ))}
-
-      <mesh position={[0, 1.9, 0]} castShadow>
-        <boxGeometry args={[1.2, 0.7, 1.2]} />
-        <meshStandardMaterial
-          color="#e2a15b"
-          metalness={0.5}
-          roughness={0.4}
-        />
-      </mesh>
-
-      <mesh position={[0, 2.85, -1.1]} castShadow>
-        <cylinderGeometry args={[0.045, 0.045, 1.8, 10]} />
-        <meshStandardMaterial color="#b5babb" />
-      </mesh>
-
-      <mesh position={[0, 3.75, -1.1]} rotation={[0.3, 0, 0]}>
-        <sphereGeometry
-          args={[0.35, 20, 12, 0, Math.PI * 2, 0, Math.PI / 2]}
-        />
-        <meshStandardMaterial
-          color="#c3c6c5"
-          metalness={0.8}
-          roughness={0.3}
-          side={THREE.DoubleSide}
-        />
-      </mesh>
-    </group>
-  );
-}
-
-// ==================================================
-// NEW: WATER EXTRACTOR MODEL
-// ==================================================
-
-function WaterExtractor({ position }) {
-  return (
-    <group position={position}>
-      {/* Reinforced concrete foundation */}
-      <mesh position={[0, 0.22, 0]} castShadow receiveShadow>
-        <boxGeometry args={[6.5, 0.45, 6.5]} />
-        <meshStandardMaterial
-          color="#545b5f"
-          metalness={0.45}
-          roughness={0.75}
-        />
-      </mesh>
-
-      {/* Industrial machinery housing */}
-      <mesh position={[0, 1.35, 0]} castShadow>
-        <boxGeometry args={[4.5, 2.2, 3.7]} />
-        <meshStandardMaterial
-          color="#a5adae"
-          metalness={0.72}
-          roughness={0.4}
-        />
-      </mesh>
-
-      {/* Upper service roof */}
-      <mesh position={[0, 2.55, 0]} castShadow>
-        <boxGeometry args={[4.9, 0.25, 4.1]} />
-        <meshStandardMaterial
-          color="#3c474d"
-          metalness={0.8}
-          roughness={0.35}
-        />
-      </mesh>
-
-      {/* Control compartment */}
-      <mesh position={[0, 1.35, 1.9]}>
-        <boxGeometry args={[1.8, 1.3, 0.15]} />
-        <meshStandardMaterial
-          color="#172f42"
-          emissive="#12364b"
-          emissiveIntensity={0.35}
-          metalness={0.4}
-          roughness={0.2}
-        />
-      </mesh>
-
-      {/* Water storage tanks */}
-      {[-1.25, 1.25].map((x) => (
-        <group key={x} position={[x, 3.35, 0]}>
-          <mesh castShadow>
-            <cylinderGeometry args={[0.65, 0.65, 1.5, 24]} />
-            <meshStandardMaterial
-              color="#77a9b9"
-              metalness={0.8}
-              roughness={0.3}
-            />
-          </mesh>
-
-          <mesh position={[0, 0.8, 0]}>
-            <sphereGeometry args={[0.65, 20, 12]} />
-            <meshStandardMaterial
-              color="#a8cbd2"
-              metalness={0.7}
-              roughness={0.3}
-            />
-          </mesh>
-
-          {[-0.5, 0.5].map((y) => (
-            <mesh key={y} position={[0, y, 0]}>
-              <torusGeometry args={[0.66, 0.07, 8, 24]} />
-              <meshStandardMaterial
-                color="#445a63"
-                metalness={0.85}
-              />
-            </mesh>
-          ))}
-        </group>
-      ))}
-
-      {/* Drill assembly */}
-      <group position={[-2.8, 0, -1]}>
-        <mesh position={[0, 2.4, 0]} castShadow>
-          <cylinderGeometry args={[0.23, 0.23, 4.5, 16]} />
-          <meshStandardMaterial
-            color="#8d989d"
-            metalness={0.85}
-            roughness={0.3}
-          />
-        </mesh>
-
-        <mesh position={[0, 4.75, 0]} castShadow>
-          <cylinderGeometry args={[0.5, 0.3, 0.65, 16]} />
-          <meshStandardMaterial
-            color="#d29a55"
-            metalness={0.65}
-          />
-        </mesh>
-
-        <mesh position={[0, 0.55, 0]} castShadow>
-          <cylinderGeometry args={[0.75, 0.75, 0.5, 16]} />
-          <meshStandardMaterial
-            color="#4c5559"
-            metalness={0.75}
-          />
-        </mesh>
+    <group ref={fitRoot}>
+      <group ref={modelRoot}>
+        <Model level={level} />
       </group>
+    </group>
+  );
+}
 
-      {/* Pipework */}
-      <mesh
-        position={[2.55, 1.2, 0]}
-        rotation={[Math.PI / 2, 0, 0]}
-        castShadow
-      >
-        <cylinderGeometry args={[0.24, 0.24, 5.2, 16]} />
-        <meshStandardMaterial
-          color="#5d91a5"
-          metalness={0.75}
-          roughness={0.3}
-        />
-      </mesh>
+// =====================================================
+// BUILDING RENDERER
+// =====================================================
 
-      <mesh
-        position={[2.55, 1.2, -2.5]}
-        rotation={[0, 0, Math.PI / 2]}
-        castShadow
-      >
-        <cylinderGeometry args={[0.24, 0.24, 2.2, 16]} />
-        <meshStandardMaterial
-          color="#5d91a5"
-          metalness={0.75}
-          roughness={0.3}
-        />
-      </mesh>
+function Building({
+  building,
+  selected,
+  onSelect,
+}) {
+  const Model = MODELS[building.type];
 
-      {/* Warning light */}
-      <mesh position={[2, 3.1, 1.4]}>
-        <sphereGeometry args={[0.17, 12, 12]} />
-        <meshStandardMaterial
-          color="#ffb54a"
-          emissive="#ff9c29"
-          emissiveIntensity={1.8}
-        />
-      </mesh>
+  if (!Model) {
+    return null;
+  }
 
-      {/* Equipment vents */}
-      {[-1, 0, 1].map((x) => (
-        <mesh key={x} position={[x, 1.4, -1.91]}>
-          <boxGeometry args={[0.55, 1.1, 0.08]} />
-          <meshStandardMaterial
-            color="#283a43"
-            metalness={0.6}
+  const groundHeight = terrainHeight(
+    building.x,
+    building.z
+  );
+
+  return (
+    <group
+      position={[
+        building.x,
+        groundHeight,
+        building.z,
+      ]}
+
+      onClick={(event) => {
+        event.stopPropagation();
+
+        if (event.delta > 5) {
+         return;
+        }
+
+        onSelect(building.id);
+      }}
+
+    >
+      {/* Selected building indicator */}
+      {selected && (
+        <mesh
+          rotation={[-Math.PI / 2, 0, 0]}
+          position={[0, 0.12, 0]}
+        >
+          <ringGeometry args={[4, 4.2, 48]} />
+          <meshBasicMaterial
+            color="#ffcc88"
+            side={THREE.DoubleSide}
           />
         </mesh>
-      ))}
-    </group>
-  );
-}
-
-// ==================================================
-// CONSTRUCTION MARKER
-// ==================================================
-
-function PlacementMarker({ position, valid }) {
-  if (!position) return null;
-
-  const color = valid ? "#62e5b0" : "#ff6868";
-
-  return (
-    <group position={position}>
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, 0.08, 0]}
-      >
-        <ringGeometry args={[2.5, 2.8, 48]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.95}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-        />
-      </mesh>
-
-      <mesh
-        rotation={[-Math.PI / 2, 0, 0]}
-        position={[0, 0.075, 0]}
-      >
-        <circleGeometry args={[2.5, 48]} />
-        <meshBasicMaterial
-          color={color}
-          transparent
-          opacity={0.15}
-          side={THREE.DoubleSide}
-          depthWrite={false}
-        />
-      </mesh>
-    </group>
-  );
-}
-
-// ==================================================
-// WORLD SCENE
-// ==================================================
-
-function WorldScene({
-  buildings,
-  placementMode,
-  hoveredPosition,
-  validPlacement,
-  onPlace,
-  onHover,
-}) {
-  return (
-    <>
-      <color attach="background" args={["#171719"]} />
-      <fog attach="fog" args={["#8e5540", 65, 190]} />
-
-      <ambientLight intensity={0.65} />
-
-      <directionalLight
-        position={[35, 50, 20]}
-        intensity={2.2}
-        castShadow
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
-      />
-
-      <MarsGround onPlace={onPlace} onHover={onHover} />
-
-      {buildings.map((building) => {
-        if (building.type === "solar") {
-          return (
-            <SolarArray
-              key={building.id}
-              position={building.position}
-            />
-          );
-        }
-
-        if (building.type === "extractor") {
-          return (
-            <WaterExtractor
-              key={building.id}
-              position={building.position}
-            />
-          );
-        }
-
-        return (
-          <Habitat
-            key={building.id}
-            position={building.position}
-          />
-        );
-      })}
-
-      {placementMode && (
-        <PlacementMarker
-          position={hoveredPosition}
-          valid={validPlacement}
-        />
       )}
 
-      <ContactShadows
-        position={[0, -0.2, 0]}
-        opacity={0.35}
-        scale={80}
-        blur={2.5}
-        far={15}
+      {/* Detailed compact architecture */}
+      <CompactBuildingModel
+        Model={Model}
+        level={building.level}
       />
 
-      <Stars
-        radius={180}
-        depth={50}
-        count={2500}
-        factor={4}
-        fade
-      />
-
-      <OrbitControls
-        makeDefault
-        enableDamping
-        dampingFactor={0.06}
-        minDistance={7}
-        maxDistance={100}
-        maxPolarAngle={Math.PI / 2.05}
-      />
-    </>
+      {/* Invisible interaction volume */}
+      <mesh position={[0, 2, 0]}>
+        <boxGeometry args={[7, 5, 7]} />
+        <meshBasicMaterial
+          transparent
+          opacity={0}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
   );
 }
 
-// ==================================================
-// ECONOMY
-// ==================================================
+// =====================================================
+// CONSTRUCTION PLACEMENT PREVIEW
+// =====================================================
 
-function getProduction(buildings) {
-  const habitats = buildings.filter(
-    (building) => building.type === "habitat"
-  ).length;
-
-  const solar = buildings.filter(
-    (building) => building.type === "solar"
-  ).length;
-
-  const extractors = buildings.filter(
-    (building) => building.type === "extractor"
-  ).length;
-
-  return {
-    energy: solar * 24 - habitats * 6 - extractors * 8,
-    water: extractors * 15,
-  };
-}
-
-function advanceEconomy(resources, production, extractorCount) {
-  const energyBefore = resources.energy;
-  const energyAfter = Math.max(
-    0,
-    Math.min(MAX_ENERGY, energyBefore + production.energy)
-  );
-
-  // Extractors operate only if the colony can meet the
-  // energy demand for this Sol. Solar output is available
-  // during the same Sol.
-  const operatingEnergy =
-    energyBefore + production.energy >= 0;
-
-  const waterProduced = operatingEnergy
-    ? extractorCount * 15
-    : 0;
-
-  return {
-    ...resources,
-    energy: energyAfter,
-    water: Math.min(MAX_WATER, resources.water + waterProduced),
-  };
-}
-
-function canAfford(resources, cost) {
-  return Object.entries(cost).every(
-    ([resource, amount]) => resources[resource] >= amount
-  );
-}
-
-function hasCollision(buildings, type, x, z) {
-  const newBuilding = BUILDINGS.find(
-    (building) => building.id === type
-  );
-
-  const newRadius = newBuilding?.radius ?? 8;
-
-  return buildings.some((building) => {
-    const dx = building.position[0] - x;
-    const dz = building.position[2] - z;
-
-    const existing = BUILDINGS.find(
-      (item) => item.id === building.type
-    );
-
-    const existingRadius = existing?.radius ?? 8;
-
-    return (
-      Math.sqrt(dx * dx + dz * dz) <
-      Math.max(newRadius, existingRadius)
-    );
-  });
-}
-
-// ==================================================
-// UI STYLES
-// ==================================================
-
-const panelStyle = {
-  background: "rgba(18, 23, 28, 0.94)",
-  border: "1px solid rgba(255,255,255,0.12)",
-  borderRadius: 14,
-  color: "#e9ecee",
-  backdropFilter: "blur(16px)",
-  boxShadow: "0 12px 36px rgba(0,0,0,0.25)",
-};
-
-const labelStyle = {
-  color: "#9aa6ad",
-  fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: 2,
-};
-
-// ==================================================
-// MAIN APPLICATION
-// ==================================================
-
-export default function MarsWorld() {
-  const [buildings, setBuildings] = useState(initialBuildings);
-
-  const [resources, setResources] = useState({
-    ...INITIAL_RESOURCES,
-  });
-
-  const [sol, setSol] = useState(1);
-  const [paused, setPaused] = useState(false);
-  const [selectedBuilding, setSelectedBuilding] =
-    useState("habitat");
-  const [placementMode, setPlacementMode] = useState(false);
-  const [hoveredPosition, setHoveredPosition] = useState(null);
-
-  const [message, setMessage] = useState(
-    "Colony initialized. Water extraction systems available."
-  );
-
-  const selectedBuildingData = BUILDINGS.find(
-    (building) => building.id === selectedBuilding
-  );
-
-  const counts = useMemo(() => {
-    return {
-      habitat: buildings.filter((b) => b.type === "habitat").length,
-      solar: buildings.filter((b) => b.type === "solar").length,
-      extractor: buildings.filter((b) => b.type === "extractor").length,
-    };
-  }, [buildings]);
-
-  const production = useMemo(
-    () => getProduction(buildings),
-    [buildings]
-  );
-
-  const validPlacement =
-    hoveredPosition !== null &&
-    !hasCollision(
-      buildings,
-      selectedBuilding,
-      hoveredPosition[0],
-      hoveredPosition[2]
-    );
-
-  // ----------------------------------------------
-  // AUTOMATIC SOL CYCLE
-  // ----------------------------------------------
+function GhostBuilding({ type, validPlacement }) {
+  const group = useRef(null);
+  const Model = MODELS[type];
 
   useEffect(() => {
-    if (paused) return;
+    const root = group.current;
+    if (!root) return;
+    const clones = [];
+    root.traverse((object) => {
+      if (!object.isMesh) return;
+      // Preview geometry must never steal clicks from the terrain.
+      object.raycast = () => {};
+      const original = object.material;
+      const makeGhost = (material) => {
+        const copy = material.clone();
+        copy.transparent = true;
+        copy.opacity = 0.38;
+        copy.depthWrite = false;
+        copy.side = THREE.DoubleSide;
+        if (copy.color) {
+          copy.color.lerp(
+            new THREE.Color(validPlacement ? '#78ffca' : '#ff7777'),
+            0.45
+          );
+        }
+        clones.push(copy);
+        return copy;
+      };
+      object.material = Array.isArray(original)
+        ? original.map(makeGhost)
+        : makeGhost(original);
+    });
+    return () => clones.forEach((material) => material.dispose());
+  }, [type, validPlacement]);
 
-    const interval = setInterval(() => {
-      setSol((previous) => previous + 1);
+  if (!Model) return null;
+  return (
+    <group ref={group}>
+      <CompactBuildingModel Model={Model} level={1} />
+    </group>
+  );
+}
 
-      setResources((previous) =>
-        advanceEconomy(
-          previous,
-          production,
-          counts.extractor
-        )
+function PlacementPreview({ cursor, validPlacement, type }) {
+  if (!cursor) return null;
+  return (
+    <group position={[cursor[0], cursor[1] + 0.15, cursor[2]]}>
+      <mesh raycast={() => {}} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[BUILDING_PLOT, BUILDING_PLOT]} />
+        <meshBasicMaterial
+          color={validPlacement ? '#7cf0b7' : '#ff7777'}
+          transparent opacity={0.2} depthWrite={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
+      <mesh raycast={() => {}} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
+        <planeGeometry args={[BUILDING_PLOT, BUILDING_PLOT]} />
+        <meshBasicMaterial color={validPlacement ? '#86ffcb' : '#ff6666'}
+          wireframe transparent opacity={0.8} depthWrite={false}
+          side={THREE.DoubleSide} />
+      </mesh>
+      <GhostBuilding key={`${type}-${validPlacement}`} type={type}
+        validPlacement={validPlacement} />
+    </group>
+  );
+}
+
+// =====================================================
+ // PHASE 6 — FREE STRATEGY CAMERA
+ // =====================================================
+
+function FreeCameraControls() {
+  const controls = useRef(null);
+  const { camera, gl } = useThree();
+
+  const pressedKeys = useRef(new Set());
+
+  const initialPosition = useMemo(
+    () => new THREE.Vector3(35, 45, 55),
+    []
+  );
+
+  const initialTarget = useMemo(
+    () => new THREE.Vector3(0, 0, 0),
+    []
+  );
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const tag = event.target?.tagName;
+
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        tag === "SELECT" ||
+        event.target?.isContentEditable
+      ) {
+        return;
+      }
+
+      const key = event.key.toLowerCase();
+
+      if ("wasdqer".includes(key) && key.length === 1) {
+        pressedKeys.current.add(key);
+      }
+    };
+
+    const onKeyUp = (event) => {
+      pressedKeys.current.delete(
+        event.key.toLowerCase()
       );
-    }, SOL_DURATION);
+    };
 
-    return () => clearInterval(interval);
-  }, [paused, production, counts.extractor]);
+    const onBlur = () => {
+      pressedKeys.current.clear();
+    };
 
-  // ----------------------------------------------
-  // CONSTRUCTION SELECTION
-  // ----------------------------------------------
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
 
-  function chooseBuilding(building) {
-    if (building.status !== "AVAILABLE") return;
-
-    if (!canAfford(resources, building.cost)) {
-      setMessage(
-        `Insufficient resources to construct ${building.name}.`
+    return () => {
+      window.removeEventListener(
+        "keydown",
+        onKeyDown
       );
+
+      window.removeEventListener(
+        "keyup",
+        onKeyUp
+      );
+
+      window.removeEventListener(
+        "blur",
+        onBlur
+      );
+    };
+  }, []);
+
+  useFrame((_, delta) => {
+    const control = controls.current;
+
+    if (!control) {
       return;
     }
 
-    setSelectedBuilding(building.id);
-    setPlacementMode(true);
-    setHoveredPosition(null);
+    const keys = pressedKeys.current;
 
-    setMessage(
-      `Placing ${building.name}. Click an available location on Mars.`
+    // Reset camera.
+    if (keys.has("r")) {
+      camera.position.copy(initialPosition);
+      control.target.copy(initialTarget);
+      control.update();
+
+      keys.delete("r");
+      return;
+    }
+
+    const speed = 30 * delta;
+
+    const forward = new THREE.Vector3();
+
+    camera.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+
+    const right = new THREE.Vector3()
+      .crossVectors(
+        forward,
+        new THREE.Vector3(0, 1, 0)
+      )
+      .normalize();
+
+    const movement = new THREE.Vector3();
+
+    if (keys.has("w")) {
+      movement.add(forward);
+    }
+
+    if (keys.has("s")) {
+      movement.sub(forward);
+    }
+
+    if (keys.has("d")) {
+      movement.add(right);
+    }
+
+    if (keys.has("a")) {
+      movement.sub(right);
+    }
+
+    if (movement.lengthSq() > 0) {
+      movement.normalize().multiplyScalar(speed);
+
+      camera.position.add(movement);
+      control.target.add(movement);
+    }
+
+    // Rotate around the current camera target,
+    // not the fixed map center.
+    const rotationSpeed = 1.2 * delta;
+
+    if (keys.has("q")) {
+      control.setAzimuthalAngle(
+        control.getAzimuthalAngle() -
+          rotationSpeed
+      );
+    }
+
+    if (keys.has("e")) {
+      control.setAzimuthalAngle(
+        control.getAzimuthalAngle() +
+          rotationSpeed
+      );
+    }
+
+    control.update();
+  });
+
+  return (
+    <MapControls
+      ref={controls}
+      makeDefault
+      enableDamping
+      dampingFactor={0.08}
+      enablePan
+      enableRotate
+      enableZoom
+      screenSpacePanning
+      minDistance={5}
+      maxDistance={180}
+      minPolarAngle={0.15}
+      maxPolarAngle={Math.PI / 2.05}
+      mouseButtons={{
+        LEFT: THREE.MOUSE.PAN,
+        MIDDLE: THREE.MOUSE.DOLLY,
+        RIGHT: THREE.MOUSE.ROTATE,
+      }}
+    />
+  );
+}
+
+// =====================================================
+// TERRITORY BORDER VISUALIZATION
+// =====================================================
+
+function TerritoryBoundary({ population }) {
+  const territory = territoryFor(population);
+  const half = territory.width / 2;
+
+  const points = useMemo(() => {
+    const divisions = 48;
+    const result = [];
+
+    // Follow terrain elevation along each edge.
+    const corners = [
+      [-half, -half],
+      [half, -half],
+      [half, half],
+      [-half, half],
+      [-half, -half],
+    ];
+
+    for (let side = 0; side < 4; side++) {
+      const [ax, az] = corners[side];
+      const [bx, bz] = corners[side + 1];
+
+      for (let i = 0; i <= divisions; i++) {
+        const t = i / divisions;
+
+        const x = THREE.MathUtils.lerp(
+          ax,
+          bx,
+          t
+        );
+
+        const z = THREE.MathUtils.lerp(
+          az,
+          bz,
+          t
+        );
+
+        result.push(
+          new THREE.Vector3(
+            x,
+            terrainHeight(x, z) + 0.3,
+            z
+          )
+        );
+      }
+    }
+
+    return result;
+  }, [half]);
+
+  const geometry = useMemo(
+    () =>
+      new THREE.BufferGeometry().setFromPoints(
+        points
+      ),
+    [points]
+  );
+
+  useEffect(() => {
+    return () => geometry.dispose();
+  }, [geometry]);
+
+  return (
+    <group>
+      <lineLoop geometry={geometry}>
+        <lineBasicMaterial
+          color="#f5b66c"
+          transparent
+          opacity={0.85}
+        />
+      </lineLoop>
+
+      {/* Territory corner markers */}
+      {[
+        [-half, -half],
+        [half, -half],
+        [half, half],
+        [-half, half],
+      ].map(([x, z], index) => (
+        <mesh
+          key={index}
+          position={[
+            x,
+            terrainHeight(x, z) + 0.8,
+            z,
+          ]}
+        >
+          <cylinderGeometry
+            args={[0.35, 0.5, 1.6, 8]}
+          />
+
+          <meshStandardMaterial
+            color="#f5b66c"
+            emissive="#a34c20"
+            emissiveIntensity={0.4}
+          />
+        </mesh>
+      ))}
+    </group>
+  );
+}
+
+ // =====================================================
+ // PHASE 6 — MAIN 3D WORLD
+ // =====================================================
+
+function snapToGrid(value) {
+  return Math.round(value / GRID) * GRID;
+}
+
+function MarsScene({
+  game,
+  selectedId,
+  placementMode,
+  onSelectBuilding,
+  onPlaceBuilding,
+  onHoverChange,
+}) {
+  const [hoveredPosition, setHoveredPosition] =
+    useState(null);
+
+  const dragStart = useRef(null);
+  const wasDragging = useRef(false);
+
+  // ---------------------------------------------------
+  // PREVENT ACCIDENTAL CONSTRUCTION WHILE DRAGGING
+  // ---------------------------------------------------
+
+  useEffect(() => {
+    const onPointerDown = (event) => {
+      if (event.button !== 0) return;
+
+      dragStart.current = {
+        x: event.clientX,
+        y: event.clientY,
+      };
+
+      wasDragging.current = false;
+    };
+
+    const onPointerMove = (event) => {
+      if (!dragStart.current) return;
+
+      const dx =
+        event.clientX - dragStart.current.x;
+
+      const dy =
+        event.clientY - dragStart.current.y;
+
+      if (Math.hypot(dx, dy) > 5) {
+        wasDragging.current = true;
+      }
+    };
+
+    const onPointerUp = () => {
+      dragStart.current = null;
+    };
+
+    window.addEventListener(
+      "pointerdown",
+      onPointerDown
     );
-  }
 
-  // ----------------------------------------------
-  // PLACEMENT
-  // ----------------------------------------------
+    window.addEventListener(
+      "pointermove",
+      onPointerMove
+    );
 
-  function handleHover(x, z) {
-    if (!placementMode) return;
+    window.addEventListener(
+      "pointerup",
+      onPointerUp
+    );
+
+    return () => {
+      window.removeEventListener(
+        "pointerdown",
+        onPointerDown
+      );
+
+      window.removeEventListener(
+        "pointermove",
+        onPointerMove
+      );
+
+      window.removeEventListener(
+        "pointerup",
+        onPointerUp
+      );
+    };
+  }, []);
+
+  // ---------------------------------------------------
+  // PLACEMENT VALIDATION
+  // ---------------------------------------------------
+
+  const placementValid = useMemo(() => {
+    if (!hoveredPosition || !placementMode) {
+      return false;
+    }
+
+    const [x, , z] = hoveredPosition;
+
+    if (
+      !insideTerritory(
+        x,
+        z,
+        game.colony.population
+      )
+    ) {
+      return false;
+    }
+
+    return !footprintCollision(
+      game.buildings,
+      x,
+      z
+    );
+  }, [
+    hoveredPosition,
+    placementMode,
+    game.buildings,
+    game.colony.population,
+  ]);
+
+  const handleHover = (x, z) => {
+    if (!placementMode) {
+      return;
+    }
 
     const snappedX = snapToGrid(x);
     const snappedZ = snapToGrid(z);
 
-    setHoveredPosition([
+    const position = [
       snappedX,
       terrainHeight(snappedX, snappedZ),
       snappedZ,
-    ]);
-  }
+    ];
 
-  function handlePlace(x, z) {
-    if (!placementMode || !selectedBuildingData) return;
+    setHoveredPosition(position);
+
+    if (onHoverChange) {
+      onHoverChange(position);
+    }
+  };
+
+  const handlePlace = (x, z) => {
+    if (!placementMode || wasDragging.current) {
+      return;
+    }
 
     const snappedX = snapToGrid(x);
     const snappedZ = snapToGrid(z);
 
     if (
-      hasCollision(
-        buildings,
-        selectedBuilding,
+      !insideTerritory(
+        snappedX,
+        snappedZ,
+        game.colony.population
+      )
+    ) {
+      return;
+    }
+
+    if (
+      footprintCollision(
+        game.buildings,
         snappedX,
         snappedZ
       )
     ) {
-      setMessage(
-        "Construction blocked: too close to another structure."
+      return;
+    }
+
+    onPlaceBuilding(
+      snappedX,
+      snappedZ
+    );
+  };
+
+  return (
+    <Canvas
+      shadows
+      camera={{
+        position: [35, 45, 55],
+        fov: 50,
+        near: 0.1,
+        far: 1000,
+      }}
+      style={{
+        width: "100%",
+        height: "100%",
+        background: "#120e0d",
+      }}
+    >
+      {/* MARTIAN ATMOSPHERE */}
+      <color
+        attach="background"
+        args={["#120e0d"]}
+      />
+
+      <fog
+        attach="fog"
+        args={["#120e0d", 90, 310]}
+      />
+
+      <ambientLight intensity={0.75} />
+
+      <hemisphereLight
+        args={[
+          "#ffe3bd",
+          "#432a22",
+          1.2,
+        ]}
+      />
+
+      <directionalLight
+        position={[70, 110, 35]}
+        intensity={2.2}
+        castShadow
+        shadow-mapSize={[
+          2048,
+          2048,
+        ]}
+      />
+
+      <Stars
+        radius={250}
+        depth={80}
+        count={1500}
+        factor={3}
+        fade
+      />
+
+      {/* FREE CAMERA */}
+      <FreeCameraControls />
+
+      {/* MARS SURFACE */}
+      <Terrain
+        onHover={handleHover}
+        onPlace={handlePlace}
+      />
+
+      {/* EXPANDABLE TERRITORY */}
+      <TerritoryBoundary
+        population={
+          game.colony.population
+        }
+      />
+
+      {/* EXISTING BUILDINGS */}
+      {game.buildings.map(
+        (building) => (
+          <Building
+            key={building.id}
+            building={building}
+            selected={
+              selectedId === building.id
+            }
+            onSelect={
+              onSelectBuilding
+            }
+          />
+        )
+      )}
+
+      {/* CONSTRUCTION PREVIEW */}
+      {placementMode &&
+        hoveredPosition && (
+          <PlacementPreview
+            type={placementMode}
+            cursor={
+              hoveredPosition
+            }
+            validPlacement={
+              placementValid
+            }
+          />
+        )}
+    </Canvas>
+  );
+}
+
+ // =====================================================
+ // PHASE 6 — MAIN GAME STATE AND ACTIONS
+ // =====================================================
+
+function useMarsGame() {
+  const [game, setGame] = useState(() => {
+    return loadSavedGame();
+  });
+
+  const [selectedId, setSelectedId] = useState(null);
+  const [placementMode, setPlacementMode] = useState(null);
+  const [notification, setNotification] = useState("");
+  const [activePanel, setActivePanel] = useState("build");
+
+  const gameRef = useRef(game);
+
+  useEffect(() => {
+    gameRef.current = game;
+  }, [game]);
+
+  // ===================================================
+  // NOTIFICATIONS
+  // ===================================================
+
+  const notify = (message) => {
+    setNotification(message);
+  };
+
+  // ===================================================
+  // START A NEW COLONY
+  // ===================================================
+
+  const startGame = (mode) => {
+    if (!["survival", "sandbox"].includes(mode)) {
+      return;
+    }
+
+    const newGame = freshGame(mode);
+
+    setGame(newGame);
+    setSelectedId(null);
+    setPlacementMode(null);
+    setActivePanel("build");
+
+    notify(
+      mode === "sandbox"
+        ? "Sandbox colony initialized."
+        : "Survival mission initialized."
+    );
+  };
+
+  // ===================================================
+  // AUTOMATIC SAVE
+  // ===================================================
+
+  useEffect(() => {
+    if (!game) {
+      return;
+    }
+
+    saveGame(game);
+  }, [game]);
+
+  // ===================================================
+  // AUTOMATIC COLONY SIMULATION
+  // ===================================================
+
+  useEffect(() => {
+    if (!game) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setGame((current) => {
+        if (!current || current.paused) {
+          return current;
+        }
+
+        if (
+          current.mode === "sandbox" &&
+          !current.sandboxSurvival
+        ) {
+          return {
+            ...current,
+            sol: current.sol + 1,
+          };
+        }
+
+        return simulateSol(current);
+      });
+    }, SOL_DURATION);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [Boolean(game)]);
+
+  // ===================================================
+  // CONSTRUCTION
+  // ===================================================
+
+  const placeBuilding = (x, z) => {
+    const type = placementMode;
+
+    if (!type || !CATALOG[type]) {
+      return;
+    }
+
+    const current = gameRef.current;
+
+    if (!current) {
+      return;
+    }
+
+    const config = CATALOG[type];
+
+    if (
+      !insideTerritory(
+        x,
+        z,
+        current.colony.population
+      )
+    ) {
+      notify("Outside the unlocked colony territory.");
+      return;
+    }
+
+    if (
+      footprintCollision(current.buildings, x, z)
+    ) {
+      notify("Construction plot is occupied.");
+      return;
+    }
+
+    const sandbox = current.mode === "sandbox";
+
+    if (
+      !canAfford(
+        current.resources,
+        config.cost,
+        sandbox
+      )
+    ) {
+      notify("Insufficient construction resources.");
+      return;
+    }
+
+    const newBuilding = {
+      id: current.nextId,
+      type,
+      level: 1,
+      x,
+      z,
+    };
+
+    setGame((previous) => {
+      if (!previous) return previous;
+
+      // Recheck against the latest state.
+      if (
+        !insideTerritory(
+          x,
+          z,
+          previous.colony.population
+        ) ||
+        footprintCollision(
+          previous.buildings,
+          x,
+          z
+        ) ||
+        !canAfford(
+          previous.resources,
+          config.cost,
+          previous.mode === "sandbox"
+        )
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+
+        resources: deduct(
+          previous.resources,
+          config.cost,
+          previous.mode === "sandbox"
+        ),
+
+        buildings: [
+          ...previous.buildings,
+          {
+            ...newBuilding,
+            id: previous.nextId,
+          },
+        ],
+
+        nextId: previous.nextId + 1,
+      };
+    });
+
+    setPlacementMode(null);
+    notify(`${config.name} construction requested.`);
+  };
+
+  // ===================================================
+  // BUILDING SELECTION
+  // ===================================================
+
+  const selectBuilding = (id) => {
+    setSelectedId(id);
+    setPlacementMode(null);
+    setActivePanel("inspect");
+  };
+
+  const selectedBuilding = game?.buildings.find(
+    (building) => building.id === selectedId
+  ) ?? null;
+
+  // ===================================================
+  // BUILDING UPGRADES
+  // ===================================================
+
+  const upgradeBuilding = (id) => {
+    const current = gameRef.current;
+
+    if (!current) return;
+
+    const building = current.buildings.find(
+      (item) => item.id === id
+    );
+
+    if (!building) {
+      notify("Building not found.");
+      return;
+    }
+
+    const config = CATALOG[building.type];
+
+    if (building.level >= config.max) {
+      notify("Building is already at maximum level.");
+      return;
+    }
+
+    // Upgrades retain the same reserved footprint.
+    // Recheck it to protect against invalid layouts.
+    if (
+      footprintCollision(
+        current.buildings,
+        building.x,
+        building.z,
+        building.id
+      )
+    ) {
+      notify(
+        "Upgrade blocked: another building occupies the plot."
       );
       return;
     }
 
-    const cost = selectedBuildingData.cost;
+    const price = upgradeCost(building);
+    const sandbox = current.mode === "sandbox";
 
-    if (!canAfford(resources, cost)) {
-      setMessage("Construction blocked: insufficient resources.");
-      setPlacementMode(false);
-      setHoveredPosition(null);
+    if (!canAfford(current.resources, price, sandbox)) {
+      notify("Insufficient resources for upgrade.");
       return;
     }
 
-    setResources((previous) => ({
-      ...previous,
-      metal: previous.metal - (cost.metal || 0),
-      energy: previous.energy - (cost.energy || 0),
-    }));
+    setGame((previous) => {
+      if (!previous) return previous;
 
-    setBuildings((previous) => [
-      ...previous,
-      {
-        id: Date.now() + Math.random(),
-        type: selectedBuilding,
-        position: [
-          snappedX,
-          terrainHeight(snappedX, snappedZ),
-          snappedZ,
-        ],
-      },
-    ]);
+      const target = previous.buildings.find(
+        (item) => item.id === id
+      );
 
-    setPlacementMode(false);
-    setHoveredPosition(null);
+      if (
+        !target ||
+        target.level >= CATALOG[target.type].max
+      ) {
+        return previous;
+      }
 
-    setMessage(
-      `${selectedBuildingData.name} successfully constructed.`
+      const latestPrice = upgradeCost(target);
+
+      if (
+        footprintCollision(
+          previous.buildings,
+          target.x,
+          target.z,
+          target.id
+        ) ||
+        !canAfford(
+          previous.resources,
+          latestPrice,
+          previous.mode === "sandbox"
+        )
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+
+        resources: deduct(
+          previous.resources,
+          latestPrice,
+          previous.mode === "sandbox"
+        ),
+
+        buildings: previous.buildings.map((item) =>
+          item.id === id
+            ? {
+                ...item,
+                level: item.level + 1,
+              }
+            : item
+        ),
+      };
+    });
+
+    notify(`${config.name} upgrade requested.`);
+  };
+
+  // ===================================================
+  // RESEARCH
+  // ===================================================
+
+  const unlockTechnology = (technologyId) => {
+    const technology = TECHNOLOGIES.find(
+      (item) => item.id === technologyId
     );
-  }
 
-  // ----------------------------------------------
-  // MANUAL SOL
-  // ----------------------------------------------
+    const current = gameRef.current;
 
-  function advanceSol() {
-    setSol((previous) => previous + 1);
+    if (!technology || !current) {
+      return;
+    }
 
-    setResources((previous) =>
-      advanceEconomy(
-        previous,
-        production,
-        counts.extractor
-      )
+    if (current.technologies[technologyId]) {
+      notify("Technology already unlocked.");
+      return;
+    }
+
+    const sandbox = current.mode === "sandbox";
+
+    if (
+      !sandbox &&
+      current.resources.research < technology.cost
+    ) {
+      notify("Insufficient research points.");
+      return;
+    }
+
+    setGame((previous) => {
+      if (
+        !previous ||
+        previous.technologies[technologyId]
+      ) {
+        return previous;
+      }
+
+      if (
+        previous.mode !== "sandbox" &&
+        previous.resources.research < technology.cost
+      ) {
+        return previous;
+      }
+
+      return {
+        ...previous,
+
+        resources: deduct(
+          previous.resources,
+          { research: technology.cost },
+          previous.mode === "sandbox"
+        ),
+
+        technologies: {
+          ...previous.technologies,
+          [technologyId]: true,
+        },
+      };
+    });
+
+    notify(`${technology.name} research requested.`);
+  };
+
+  // ===================================================
+  // SIMULATION CONTROLS
+  // ===================================================
+
+  const togglePause = () => {
+    setGame((previous) =>
+      previous
+        ? {
+            ...previous,
+            paused: !previous.paused,
+          }
+        : previous
+    );
+  };
+
+  const advanceSol = () => {
+    setGame((previous) => {
+      if (!previous) return previous;
+
+      if (
+        previous.mode === "sandbox" &&
+        !previous.sandboxSurvival
+      ) {
+        return {
+          ...previous,
+          sol: previous.sol + 1,
+        };
+      }
+
+      return simulateSol(previous);
+    });
+  };
+
+  const toggleSandboxSurvival = () => {
+    setGame((previous) => {
+      if (!previous || previous.mode !== "sandbox") {
+        return previous;
+      }
+
+      return {
+        ...previous,
+        sandboxSurvival: !previous.sandboxSurvival,
+      };
+    });
+  };
+
+  // ===================================================
+  // RESET COLONY
+  // ===================================================
+
+  const resetColony = () => {
+    if (!game) return;
+
+    const confirmed = window.confirm(
+      "Reset this colony? All current progress will be lost."
     );
 
-    setMessage("One Martian Sol completed.");
-  }
+    if (!confirmed) return;
 
-  const resourceItems = [
-    { key: "metal", label: "METAL", icon: "◇", color: "#d1a786" },
-    { key: "energy", label: "ENERGY", icon: "⚡", color: "#eac26a" },
-    { key: "water", label: "WATER", icon: "◉", color: "#79c5e9" },
-    { key: "food", label: "FOOD", icon: "♧", color: "#9bd7a0" },
+    const newGame = freshGame(game.mode);
+
+    setGame(newGame);
+    setSelectedId(null);
+    setPlacementMode(null);
+
+    notify("Colony reset successfully.");
+  };
+
+  // ===================================================
+  // DERIVED COLONY STATISTICS
+  // ===================================================
+
+  const satisfaction = useMemo(
+    () =>
+      game
+        ? calculateSatisfaction(game)
+        : null,
+    [game]
+  );
+
+  const territory = useMemo(
+    () =>
+      game
+        ? territoryFor(game.colony.population)
+        : null,
+    [game]
+  );
+
+  const housingCapacity = useMemo(() => {
+    if (!game) return 0;
+
+    return game.buildings
+      .filter((building) => building.type === "habitat")
+      .reduce(
+        (total, building) =>
+          total + HOUSING[building.level],
+        0
+      );
+  }, [game]);
+
+  // ===================================================
+  // EXPOSE CONTROLS TO MAIN INTERFACE
+  // ===================================================
+
+  return {
+    game,
+    selectedId,
+    selectedBuilding,
+    placementMode,
+    notification,
+    activePanel,
+
+    satisfaction,
+    territory,
+    housingCapacity,
+
+    startGame,
+    placeBuilding,
+    selectBuilding,
+    upgradeBuilding,
+    unlockTechnology,
+
+    togglePause,
+    advanceSol,
+    toggleSandboxSurvival,
+    resetColony,
+
+    setPlacementMode,
+    setSelectedId,
+    setActivePanel,
+    setNotification,
+  };
+}
+
+ // =====================================================
+ // PHASE 6 — MAIN GAME INTERFACE
+ // =====================================================
+
+const UI = {
+  root: {
+    display: "flex",
+    width: "100%",
+    height: "100vh",
+    overflow: "hidden",
+    background: "#0a0e14",
+    color: "#edf1f5",
+    fontFamily: "Inter, system-ui, sans-serif",
+  },
+
+  sidebar: {
+    width: 340,
+    minWidth: 340,
+    height: "100%",
+    overflowY: "auto",
+    background: "#101720",
+    borderRight: "1px solid #26313d",
+    padding: 20,
+    boxSizing: "border-box",
+  },
+
+  world: {
+    position: "relative",
+    flex: 1,
+    minWidth: 0,
+    height: "100%",
+  },
+
+  heading: {
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 2,
+    color: "#e8a879",
+    marginBottom: 12,
+  },
+
+  card: {
+    background: "#18222e",
+    border: "1px solid #2a3846",
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+  },
+
+  button: {
+    display: "block",
+    width: "100%",
+    padding: "12px 14px",
+    marginBottom: 8,
+    border: "1px solid #384a5b",
+    borderRadius: 9,
+    background: "#263849",
+    color: "#fff",
+    cursor: "pointer",
+    textAlign: "left",
+    fontWeight: 700,
+  },
+
+  small: {
+    fontSize: 12,
+    color: "#9baaba",
+  },
+};
+
+// =====================================================
+// RESOURCE DISPLAY
+// =====================================================
+
+function ResourceBar({ resources }) {
+  const items = [
+    ["metal", "METAL", "◇"],
+    ["energy", "ENERGY", "⚡"],
+    ["water", "WATER", "◉"],
+    ["food", "FOOD", "♧"],
+    ["research", "RESEARCH", "✧"],
   ];
-
-  const projectedEnergy = resources.energy + production.energy;
-  const extractorsOperational =
-    counts.extractor > 0 && projectedEnergy >= 0;
 
   return (
     <div
       style={{
-        position: "relative",
-        width: "100vw",
-        height: "100vh",
-        overflow: "hidden",
-        background: "#171719",
-        fontFamily:
-          "'Inter', 'Helvetica Neue', Arial, sans-serif",
+        display: "grid",
+        gridTemplateColumns: "repeat(2, 1fr)",
+        gap: 8,
       }}
     >
-      {/* 3D WORLD */}
-      <Canvas
-        shadows
-        camera={{
-          position: [22, 16, 22],
-          fov: 45,
-          near: 0.1,
-          far: 500,
-        }}
-        gl={{
-          antialias: true,
-          toneMapping: THREE.ACESFilmicToneMapping,
-        }}
-      >
-        <WorldScene
-          buildings={buildings}
-          placementMode={placementMode}
-          hoveredPosition={hoveredPosition}
-          validPlacement={validPlacement}
-          onPlace={handlePlace}
-          onHover={handleHover}
-        />
-      </Canvas>
+      {items.map(([key, label, symbol]) => (
+        <div
+          key={key}
+          style={{
+            background: "#18222e",
+            border: "1px solid #2a3846",
+            borderRadius: 9,
+            padding: 10,
+          }}
+        >
+          <div style={UI.small}>
+            {symbol} {label}
+          </div>
 
-      {/* BRANDING */}
+          <strong style={{ fontSize: 19 }}>
+            {Math.floor(resources[key]).toLocaleString()}
+          </strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// =====================================================
+// BUILDING CATALOGUE
+// =====================================================
+
+function BuildingCatalogue({
+  game,
+  placementMode,
+  onChoose,
+}) {
+  return (
+    <div>
+      {Object.entries(CATALOG).map(([type, config]) => {
+        const active = placementMode === type;
+
+        const affordable = canAfford(
+          game.resources,
+          config.cost,
+          game.mode === "sandbox"
+        );
+
+        return (
+          <button
+            key={type}
+            type="button"
+            onClick={() =>
+              onChoose(active ? null : type)
+            }
+            style={{
+              ...UI.button,
+              borderColor: active
+                ? "#e8a879"
+                : "#384a5b",
+              background: active
+                ? "#4b352b"
+                : "#263849",
+              opacity: affordable ? 1 : 0.55,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <span>
+                {config.icon} {config.name}
+              </span>
+
+              <span style={UI.small}>
+                LVL {config.max} MAX
+              </span>
+            </div>
+
+            <div
+              style={{
+                ...UI.small,
+                marginTop: 6,
+              }}
+            >
+              {Object.entries(config.cost)
+                .map(([resource, amount]) =>
+                  `${amount} ${resource}`
+                )
+                .join(" · ")}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// =====================================================
+// SELECTED BUILDING INSPECTOR
+// =====================================================
+
+function BuildingInspector({
+  building,
+  game,
+  onUpgrade,
+}) {
+  if (!building) {
+    return (
+      <div style={UI.card}>
+        <p style={UI.small}>
+          Select a building on the map to inspect
+          its production and upgrade options.
+        </p>
+      </div>
+    );
+  }
+
+  const config = CATALOG[building.type];
+  const maximum = building.level >= config.max;
+
+  const cost = maximum
+    ? null
+    : upgradeCost(building);
+
+  const affordable =
+    maximum ||
+    canAfford(
+      game.resources,
+      cost,
+      game.mode === "sandbox"
+    );
+
+  const production = output(
+    building,
+    game.technologies
+  );
+
+  return (
+    <div style={UI.card}>
+      <div style={UI.heading}>
+        BUILDING INSPECTOR
+      </div>
+
+      <h3 style={{ margin: "0 0 8px" }}>
+        {config.icon} {config.name}
+      </h3>
+
+      <p style={UI.small}>
+        Level {building.level} / {config.max}
+      </p>
+
+      <p style={UI.small}>
+        Production / Capacity: {production}
+      </p>
+
+      <p style={UI.small}>
+        Energy demand: {energyCost(building)}
+      </p>
+
+      <p style={UI.small}>
+        Location: {building.x}, {building.z}
+      </p>
+
+      {maximum ? (
+        <strong style={{ color: "#89dfb2" }}>
+          MAXIMUM LEVEL REACHED
+        </strong>
+      ) : (
+        <>
+          <div
+            style={{
+              ...UI.small,
+              marginBottom: 12,
+            }}
+          >
+            Upgrade cost:{" "}
+            {Object.entries(cost)
+              .filter(([, amount]) => amount > 0)
+              .map(([resource, amount]) =>
+                `${amount} ${resource}`
+              )
+              .join(" · ")}
+          </div>
+
+          <button
+            type="button"
+            style={{
+              ...UI.button,
+              opacity: affordable ? 1 : 0.5,
+            }}
+            disabled={!affordable}
+            onClick={() => onUpgrade(building.id)}
+          >
+            UPGRADE TO LEVEL {building.level + 1}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+// =====================================================
+// RESEARCH PANEL
+// =====================================================
+
+function ResearchPanel({
+  game,
+  onResearch,
+}) {
+  return (
+    <div>
+      {TECHNOLOGIES.map((technology) => {
+        const unlocked =
+          game.technologies[technology.id];
+
+        const affordable =
+          game.mode === "sandbox" ||
+          game.resources.research >= technology.cost;
+
+        return (
+          <div
+            key={technology.id}
+            style={UI.card}
+          >
+            <strong>{technology.name}</strong>
+
+            <p style={UI.small}>
+              {technology.description}
+            </p>
+
+            <p style={UI.small}>
+              Research cost: {technology.cost}
+            </p>
+
+            <button
+              type="button"
+              style={{
+                ...UI.button,
+                opacity:
+                  unlocked || !affordable
+                    ? 0.55
+                    : 1,
+              }}
+              disabled={unlocked || !affordable}
+              onClick={() =>
+                onResearch(technology.id)
+              }
+            >
+              {unlocked
+                ? "RESEARCHED"
+                : "UNLOCK TECHNOLOGY"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// =====================================================
+// COLONY STATUS
+// =====================================================
+
+function ColonyStatus({
+  game,
+  housingCapacity,
+  territory,
+}) {
+  return (
+    <div style={UI.card}>
+      <div style={UI.heading}>
+        COLONY STATUS
+      </div>
+
       <div
         style={{
-          position: "absolute",
-          top: 24,
-          left: 24,
-          pointerEvents: "none",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: 12,
+        }}
+      >
+        <div>
+          <div style={UI.small}>POPULATION</div>
+          <strong>{game.colony.population}</strong>
+        </div>
+
+        <div>
+          <div style={UI.small}>HOUSING</div>
+          <strong>{housingCapacity}</strong>
+        </div>
+
+        <div>
+          <div style={UI.small}>HEALTH</div>
+          <strong>{game.colony.health}%</strong>
+        </div>
+
+        <div>
+          <div style={UI.small}>MARTIAN SOL</div>
+          <strong>{game.sol}</strong>
+        </div>
+      </div>
+
+      <div
+        style={{
+          borderTop: "1px solid #2a3846",
+          marginTop: 14,
+          paddingTop: 12,
+        }}
+      >
+        <div style={UI.small}>
+          TERRITORY: {territory.title}
+        </div>
+
+        <strong>
+          {territory.width} × {territory.width}
+        </strong>
+
+        <div
+          style={{
+            ...UI.small,
+            marginTop: 5,
+          }}
+        >
+          {game.buildings.length} buildings constructed
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ // =====================================================
+ // PHASE 6 — CITIZEN SATISFACTION DASHBOARD
+ // =====================================================
+
+function SatisfactionDashboard({ satisfaction }) {
+  if (!satisfaction) {
+    return null;
+  }
+
+  const getColor = (value) => {
+    if (value >= 80) return "#83dfb0";
+    if (value >= 50) return "#f1c27d";
+    return "#ef8585";
+  };
+
+  return (
+    <div style={UI.card}>
+      <div style={UI.heading}>
+        CITIZEN SATISFACTION
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 18,
+        }}
+      >
+        <div>
+          <div style={UI.small}>
+            OVERALL SATISFACTION
+          </div>
+
+          <strong
+            style={{
+              fontSize: 32,
+              color: getColor(satisfaction.overall),
+            }}
+          >
+            {satisfaction.overall}%
+          </strong>
+        </div>
+
+        <div
+          style={{
+            color: "#9baaba",
+            fontSize: 11,
+            textAlign: "right",
+          }}
+        >
+          COLONY
+          <div>WELLBEING INDEX</div>
+        </div>
+      </div>
+
+      {satisfaction.indicators.map((indicator) => (
+        <div
+          key={indicator.id}
+          style={{ marginBottom: 15 }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 12,
+              marginBottom: 7,
+            }}
+          >
+            <span>{indicator.label}</span>
+
+            <strong>
+              {indicator.implemented
+                ? `${indicator.value}%`
+                : "PLANNED"}
+            </strong>
+          </div>
+
+          <div
+            style={{
+              height: 7,
+              borderRadius: 10,
+              background: "#2b3947",
+              overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: "100%",
+                width: indicator.implemented
+                  ? `${indicator.value}%`
+                  : "0%",
+                background: indicator.implemented
+                  ? getColor(indicator.value)
+                  : "#607080",
+                borderRadius: 10,
+                transition: "width 0.3s ease",
+              }}
+            />
+          </div>
+        </div>
+      ))}
+
+      <p
+        style={{
+          ...UI.small,
+          lineHeight: 1.6,
+          marginBottom: 0,
+        }}
+      >
+        Satisfaction currently reflects housing,
+        essential supplies, and energy reliability.
+        Healthcare and recreation are reserved for
+        future colony infrastructure.
+      </p>
+    </div>
+  );
+}
+
+// =====================================================
+// PHASE 6 — GAME INTERFACE
+// =====================================================
+
+export default function MarsWorld() {
+  const {
+    game,
+    selectedId,
+    selectedBuilding,
+    placementMode,
+    notification,
+    activePanel,
+
+    satisfaction,
+    territory,
+    housingCapacity,
+
+    startGame,
+    placeBuilding,
+    selectBuilding,
+    upgradeBuilding,
+    unlockTechnology,
+
+    togglePause,
+    advanceSol,
+    toggleSandboxSurvival,
+    resetColony,
+
+    setPlacementMode,
+    setSelectedId,
+    setActivePanel,
+    setNotification,
+  } = useMarsGame();
+
+  // ===================================================
+  // NEW GAME SCREEN
+  // ===================================================
+
+  if (!game) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          background:
+            "linear-gradient(135deg, #0b1018, #261710)",
+          color: "#fff",
+          display: "flex",
+          justifyContent: "center",
+          alignItems: "center",
+          fontFamily: "Inter, sans-serif",
+          padding: 24,
+          boxSizing: "border-box",
         }}
       >
         <div
           style={{
-            fontSize: 11,
-            color: "#f1a16c",
-            letterSpacing: 3,
-            fontWeight: 800,
-            marginBottom: 7,
+            width: "100%",
+            maxWidth: 520,
+            padding: 36,
+            background: "#141d28",
+            border: "1px solid #3b4651",
+            borderRadius: 20,
           }}
         >
+          <div style={UI.heading}>
+            MARS COLONIZATION PROGRAM
+          </div>
+
+          <h1
+            style={{
+              fontSize: 38,
+              lineHeight: 1.1,
+              marginBottom: 12,
+            }}
+          >
+            MARS:
+            <br />
+            THE NEW FRONTIER
+          </h1>
+
+          <p
+            style={{
+              color: "#9baaba",
+              lineHeight: 1.7,
+              marginBottom: 30,
+            }}
+          >
+            Establish a permanent human settlement
+            on Mars. Develop infrastructure, manage
+            resources, research technologies, and
+            expand your colony across the planet.
+          </p>
+
+          <button
+            type="button"
+            style={UI.button}
+            onClick={() => startGame("survival")}
+          >
+            START SURVIVAL COLONY
+          </button>
+
+          <button
+            type="button"
+            style={{
+              ...UI.button,
+              background: "#453126",
+            }}
+            onClick={() => startGame("sandbox")}
+          >
+            START SANDBOX COLONY
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ===================================================
+  // MAIN PLAYABLE INTERFACE
+  // ===================================================
+
+  return (
+    <div style={UI.root}>
+      {/* LEFT SIDEBAR */}
+      <aside style={UI.sidebar}>
+        <div style={UI.heading}>
           MARS COLONIZATION PROGRAM
         </div>
 
-        <div
+        <h2
           style={{
-            color: "#ffffff",
-            fontSize: 25,
-            fontWeight: 800,
-            letterSpacing: 1,
+            margin: "0 0 6px",
+            fontSize: 24,
+            letterSpacing: -0.8,
           }}
         >
           THE NEW FRONTIER
-        </div>
+        </h2>
 
-        <div
+        <p
           style={{
-            color: "#aeb7bc",
-            fontSize: 11,
-            marginTop: 7,
-            letterSpacing: 1.5,
+            ...UI.small,
+            marginBottom: 24,
           }}
         >
-          COLONY OPERATIONS / SECTOR 01
-        </div>
-      </div>
+          {game.mode.toUpperCase()} MODE
+          {" · "}
+          SOL {game.sol}
+        </p>
 
-      {/* RESOURCE HUD */}
-      <div
-        style={{
-          ...panelStyle,
-          position: "absolute",
-          top: 22,
-          right: 22,
-          width: 295,
-          padding: 18,
-          boxSizing: "border-box",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-            marginBottom: 17,
-          }}
-        >
-          <span style={labelStyle}>COLONY RESOURCES</span>
+        <ResourceBar resources={game.resources} />
 
-          <span
-            style={{
-              fontSize: 11,
-              fontWeight: 800,
-              color: "#f1b07a",
-            }}
-          >
-            SOL {String(sol).padStart(3, "0")}
-          </span>
-        </div>
+        <div style={{ height: 20 }} />
 
+        <ColonyStatus
+          game={game}
+          housingCapacity={housingCapacity}
+          territory={territory}
+        />
+
+        {/* NAVIGATION */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
-            gap: 10,
+            gridTemplateColumns: "repeat(2, 1fr)",
+            gap: 6,
+            marginBottom: 18,
           }}
         >
-          {resourceItems.map((item) => (
-            <div
-              key={item.key}
+          {[
+            ["build", "BUILD"],
+            ["inspect", "INSPECT"],
+            ["research", "RESEARCH"],
+            ["citizens", "CITIZENS"],
+          ].map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setActivePanel(id)}
               style={{
-                background: "rgba(255,255,255,0.045)",
-                borderRadius: 9,
-                padding: 11,
+                ...UI.button,
+                marginBottom: 0,
+                textAlign: "center",
+                padding: "10px 4px",
+                fontSize: 11,
+                background:
+                  activePanel === id
+                    ? "#67432f"
+                    : "#263849",
               }}
             >
-              <div
-                style={{
-                  ...labelStyle,
-                  fontSize: 9,
-                  letterSpacing: 1.3,
-                }}
-              >
-                <span style={{ color: item.color }}>
-                  {item.icon}{" "}
-                </span>
-                {item.label}
-              </div>
-
-              <div
-                style={{
-                  fontSize: 23,
-                  fontWeight: 800,
-                  marginTop: 5,
-                  color: "#f4f5f5",
-                }}
-              >
-                {resources[item.key]}
-              </div>
-            </div>
+              {label}
+            </button>
           ))}
         </div>
 
-        <div
-          style={{
-            borderTop: "1px solid rgba(255,255,255,0.1)",
-            marginTop: 14,
-            paddingTop: 13,
-            display: "flex",
-            justifyContent: "space-between",
-          }}
-        >
-          <span style={{ ...labelStyle, letterSpacing: 1 }}>
-            POWER / SOL
-          </span>
+        {/* CONSTRUCTION */}
+        {activePanel === "build" && (
+          <>
+            <div style={UI.heading}>
+              CONSTRUCTION CATALOGUE
+            </div>
 
-          <span
-            style={{
-              fontWeight: 800,
-              color:
-                production.energy >= 0 ? "#72d7aa" : "#ff9b8d",
-            }}
-          >
-            {production.energy > 0 ? "+" : ""}
-            {production.energy}
-          </span>
-        </div>
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            marginTop: 11,
-          }}
-        >
-          <span style={{ ...labelStyle, letterSpacing: 1 }}>
-            WATER / SOL
-          </span>
-
-          <span
-            style={{
-              fontWeight: 800,
-              color: extractorsOperational
-                ? "#79c5e9"
-                : "#9aa6ad",
-            }}
-          >
-            +
-            {extractorsOperational
-              ? production.water
-              : 0}
-          </span>
-        </div>
-
-        <div
-          style={{
-            fontSize: 10,
-            color: "#9aa6ad",
-            marginTop: 13,
-            lineHeight: 1.7,
-          }}
-        >
-          {counts.habitat} HABITATS · {counts.solar} SOLAR ARRAYS
-          <div>{counts.extractor} WATER EXTRACTORS</div>
-        </div>
-
-        {counts.extractor > 0 && (
-          <div
-            style={{
-              marginTop: 10,
-              fontSize: 10,
-              color: extractorsOperational
-                ? "#72d7aa"
-                : "#ff9b8d",
-            }}
-          >
-            ● WATER SYSTEMS{" "}
-            {extractorsOperational ? "OPERATIONAL" : "POWER LIMITED"}
-          </div>
-        )}
-      </div>
-
-      {/* CONSTRUCTION PANEL */}
-      <div
-        style={{
-          ...panelStyle,
-          position: "absolute",
-          left: 24,
-          bottom: 24,
-          width: 300,
-          maxHeight: "65vh",
-          overflowY: "auto",
-          padding: 16,
-          boxSizing: "border-box",
-        }}
-      >
-        <div style={{ ...labelStyle, marginBottom: 14 }}>
-          01 / CONSTRUCTION
-        </div>
-
-        {BUILDINGS.map((building) => {
-          const available = building.status === "AVAILABLE";
-          const affordable =
-            available && canAfford(resources, building.cost);
-          const active =
-            placementMode && selectedBuilding === building.id;
-
-          return (
-            <button
-              key={building.id}
-              onClick={() => chooseBuilding(building)}
-              disabled={!available}
-              style={{
-                width: "100%",
-                display: "flex",
-                gap: 12,
-                alignItems: "center",
-                textAlign: "left",
-                background: active
-                  ? "rgba(240,158,104,0.17)"
-                  : "rgba(255,255,255,0.035)",
-                border: active
-                  ? "1px solid #d88b5e"
-                  : "1px solid rgba(255,255,255,0.06)",
-                borderRadius: 9,
-                color: available ? "#eef0f1" : "#747d83",
-                padding: 12,
-                marginBottom: 8,
-                cursor: available ? "pointer" : "not-allowed",
-                opacity: available ? 1 : 0.55,
+            <BuildingCatalogue
+              game={game}
+              placementMode={placementMode}
+              onChoose={(type) => {
+                setPlacementMode(type);
+                setSelectedId(null);
               }}
-            >
-              <span
-                style={{
-                  fontSize: 23,
-                  width: 29,
-                  color: "#e6a270",
-                }}
-              >
-                {building.icon}
-              </span>
+            />
 
-              <span style={{ flex: 1 }}>
-                <strong
-                  style={{
-                    display: "block",
-                    fontSize: 12,
-                    marginBottom: 4,
-                  }}
-                >
-                  {building.name}
+            {placementMode && (
+              <div style={UI.card}>
+                <strong>
+                  PLACING: {CATALOG[placementMode].name}
                 </strong>
 
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: 10,
-                    lineHeight: 1.5,
-                    color: "#9ba5aa",
-                  }}
-                >
-                  {building.description}
-                </span>
+                <p style={UI.small}>
+                  Click a green construction plot on
+                  the terrain to build.
+                </p>
 
-                <span
-                  style={{
-                    display: "block",
-                    fontSize: 10,
-                    marginTop: 6,
-                    color: !available
-                      ? "#777f83"
-                      : affordable
-                      ? "#e9b58e"
-                      : "#ff9289",
-                  }}
+                <button
+                  type="button"
+                  style={UI.button}
+                  onClick={() => setPlacementMode(null)}
                 >
-                  {available
-                    ? `${building.cost.metal} METAL · ${building.cost.energy} ENERGY`
-                    : "COMING SOON"}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-
-        {placementMode && (
-          <button
-            onClick={() => {
-              setPlacementMode(false);
-              setHoveredPosition(null);
-              setMessage("Construction cancelled.");
-            }}
-            style={{
-              width: "100%",
-              padding: 11,
-              marginTop: 5,
-              background: "rgba(255,100,100,0.1)",
-              color: "#ffaaa3",
-              border: "1px solid rgba(255,120,120,0.25)",
-              borderRadius: 8,
-              cursor: "pointer",
-              fontWeight: 700,
-              fontSize: 11,
-            }}
-          >
-            CANCEL CONSTRUCTION
-          </button>
+                  CANCEL CONSTRUCTION
+                </button>
+              </div>
+            )}
+          </>
         )}
-      </div>
 
-      {/* SIMULATION CONTROLS */}
-      <div
-        style={{
-          ...panelStyle,
-          position: "absolute",
-          right: 22,
-          bottom: 24,
-          width: 250,
-          padding: 16,
-          boxSizing: "border-box",
-        }}
-      >
-        <div style={{ ...labelStyle, marginBottom: 12 }}>
-          02 / SIMULATION
-        </div>
+        {/* BUILDING INSPECTION */}
+        {activePanel === "inspect" && (
+          <BuildingInspector
+            building={selectedBuilding}
+            game={game}
+            onUpgrade={upgradeBuilding}
+          />
+        )}
 
-        <button
-          onClick={advanceSol}
-          style={{
-            width: "100%",
-            padding: 12,
-            background: "#c98257",
-            color: "#16191b",
-            border: "none",
-            borderRadius: 8,
-            fontSize: 11,
-            fontWeight: 800,
-            cursor: "pointer",
-            letterSpacing: 1,
-          }}
-        >
-          ADVANCE ONE SOL →
-        </button>
+        {/* TECHNOLOGY RESEARCH */}
+        {activePanel === "research" && (
+          <>
+            <div style={UI.heading}>
+              TECHNOLOGY DEVELOPMENT
+            </div>
 
-        <button
-          onClick={() => setPaused((previous) => !previous)}
-          style={{
-            width: "100%",
-            padding: 11,
-            marginTop: 8,
-            background: "rgba(255,255,255,0.06)",
-            color: "#e4e8ea",
-            border: "1px solid rgba(255,255,255,0.12)",
-            borderRadius: 8,
-            fontSize: 11,
-            fontWeight: 700,
-            cursor: "pointer",
-          }}
-        >
-          {paused ? "RESUME SIMULATION" : "PAUSE SIMULATION"}
-        </button>
+            <ResearchPanel
+              game={game}
+              onResearch={unlockTechnology}
+            />
+          </>
+        )}
 
+        {/* CITIZEN SATISFACTION */}
+        {activePanel === "citizens" && (
+          <SatisfactionDashboard
+            satisfaction={satisfaction}
+          />
+        )}
+
+        {/* SIMULATION CONTROLS */}
         <div
           style={{
-            fontSize: 10,
-            color: "#9ba6ad",
-            textAlign: "center",
-            marginTop: 12,
+            marginTop: 24,
+            borderTop: "1px solid #2a3846",
+            paddingTop: 20,
           }}
         >
-          {paused
-            ? "SIMULATION PAUSED"
-            : "AUTO-ADVANCE EVERY 5 SECONDS"}
-        </div>
-      </div>
+          <div style={UI.heading}>
+            SIMULATION CONTROL
+          </div>
 
-      {/* STATUS BAR */}
-      <div
-        style={{
-          position: "absolute",
-          left: "50%",
-          bottom: 26,
-          transform: "translateX(-50%)",
-          ...panelStyle,
-          padding: "12px 18px",
-          fontSize: 11,
-          color: "#c8d1d4",
-          textAlign: "center",
-          maxWidth: 360,
-          pointerEvents: "none",
-        }}
-      >
-        <span style={{ color: "#f0a16d" }}>● </span>
-        {message}
-      </div>
+          <button
+            type="button"
+            style={UI.button}
+            onClick={advanceSol}
+          >
+            ADVANCE ONE SOL
+          </button>
+
+          <button
+            type="button"
+            style={UI.button}
+            onClick={togglePause}
+          >
+            {game.paused
+              ? "RESUME SIMULATION"
+              : "PAUSE SIMULATION"}
+          </button>
+
+          {game.mode === "sandbox" && (
+            <button
+              type="button"
+              style={UI.button}
+              onClick={toggleSandboxSurvival}
+            >
+              SURVIVAL SYSTEMS:{" "}
+              {game.sandboxSurvival ? "ON" : "OFF"}
+            </button>
+          )}
+
+          <button
+            type="button"
+            style={{
+              ...UI.button,
+              background: "#42282b",
+              borderColor: "#704449",
+            }}
+            onClick={resetColony}
+          >
+            RESET COLONY
+          </button>
+        </div>
+      </aside>
+
+      {/* 3D WORLD */}
+      <main style={UI.world}>
+        <MarsScene
+          game={game}
+          selectedId={selectedId}
+          placementMode={placementMode}
+          onSelectBuilding={selectBuilding}
+          onPlaceBuilding={placeBuilding}
+        />
+
+        {/* TOP STATUS OVERLAY */}
+        <div
+          style={{
+            position: "absolute",
+            top: 18,
+            left: 18,
+            padding: "12px 16px",
+            background: "rgba(12,18,26,0.88)",
+            border: "1px solid #354350",
+            borderRadius: 12,
+            pointerEvents: "none",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              color: "#e8a879",
+              fontWeight: 800,
+              letterSpacing: 1.5,
+            }}
+          >
+            MARS SURFACE OPERATIONS
+          </div>
+
+          <div
+            style={{
+              marginTop: 6,
+              fontSize: 12,
+              color: "#c5d0da",
+            }}
+          >
+            {territory.title}
+            {" · "}
+            {territory.width} × {territory.width}
+          </div>
+        </div>
+
+        {/* CAMERA HELP */}
+        <div
+          style={{
+            position: "absolute",
+            right: 18,
+            bottom: 18,
+            padding: "12px 16px",
+            background: "rgba(12,18,26,0.88)",
+            border: "1px solid #354350",
+            borderRadius: 12,
+            fontSize: 11,
+            lineHeight: 1.8,
+            color: "#c5d0da",
+            pointerEvents: "none",
+          }}
+        >
+          LEFT DRAG — PAN
+          <br />
+          RIGHT DRAG — ROTATE
+          <br />
+          SCROLL — ZOOM
+          <br />
+          WASD — MOVE
+          <br />
+          Q / E — ROTATE
+          <br />
+          R — RESET CAMERA
+        </div>
+
+        {/* NOTIFICATIONS */}
+        {notification && (
+          <div
+            style={{
+              position: "absolute",
+              top: 18,
+              right: 18,
+              maxWidth: 320,
+              padding: "13px 18px",
+              borderRadius: 10,
+              background: "#263849",
+              border: "1px solid #e8a879",
+              color: "#fff",
+              fontSize: 13,
+              boxShadow: "0 10px 35px #0007",
+            }}
+          >
+            {notification}
+
+            <button
+              type="button"
+              onClick={() => setNotification("")}
+              style={{
+                marginLeft: 12,
+                background: "none",
+                border: "none",
+                color: "#e8a879",
+                cursor: "pointer",
+              }}
+            >
+              ✕
+            </button>
+          </div>
+        )}
+      </main>
     </div>
   );
 }
