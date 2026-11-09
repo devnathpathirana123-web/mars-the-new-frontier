@@ -2892,6 +2892,57 @@ function ColonyStatus({
 }
 
  // =====================================================
+// NET PRODUCTION — PROJECTED RESOURCE CHANGE PER SOL
+// =====================================================
+
+function NetProductionPanel({ game }) {
+  const active = game.mode !== "sandbox" || game.sandboxSurvival;
+  const net = useMemo(() => {
+    if (!active) return null;
+    const projected = simulateSol(game);
+    return Object.fromEntries(
+      ["metal", "energy", "water", "food", "research"].map((key) => [
+        key,
+        projected.resources[key] - game.resources[key],
+      ])
+    );
+  }, [game, active]);
+
+  const items = [
+    ["metal", "◇", "METAL"],
+    ["energy", "⚡", "ENERGY"],
+    ["water", "◉", "WATER"],
+    ["food", "♧", "FOOD"],
+    ["research", "✧", "RESEARCH"],
+  ];
+
+  return (
+    <div style={UI.card}>
+      <div style={UI.heading}>NET PRODUCTION / SOL</div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+        {items.map(([key, symbol, label]) => {
+          const value = net?.[key] ?? 0;
+          const color = !active ? "#9baaba" : value > 0 ? "#83dfb0" : value < 0 ? "#ef8585" : "#c5d0da";
+          return (
+            <div key={key} style={{ background: "#111b26", border: "1px solid #2a3846", borderRadius: 9, padding: "10px 12px" }}>
+              <div style={{ ...UI.small, fontSize: 10 }}>{symbol} {label}</div>
+              <strong style={{ color, fontSize: 18 }}>
+                {!active ? "OFF" : `${value > 0 ? "+" : ""}${value.toLocaleString()}`}
+              </strong>
+            </div>
+          );
+        })}
+      </div>
+      <p style={{ ...UI.small, marginBottom: 0, marginTop: 10, lineHeight: 1.5 }}>
+        {!active
+          ? "Sandbox survival is off; resource production and consumption are disabled."
+          : "Projected change next sol, after production, building energy use, citizen consumption and storage limits."}
+      </p>
+    </div>
+  );
+}
+
+// =====================================================
  // PHASE 6 — CITIZEN SATISFACTION DASHBOARD
  // =====================================================
 
@@ -3267,11 +3318,12 @@ export default function MarsWorld() {
           </>
         )}
 
-        {/* CITIZEN SATISFACTION */}
+        {/* CITIZEN SATISFACTION + NET PRODUCTION */}
         {activePanel === "citizens" && (
-          <SatisfactionDashboard
-            satisfaction={satisfaction}
-          />
+          <>
+            <NetProductionPanel game={game} />
+            <SatisfactionDashboard satisfaction={satisfaction} />
+          </>
         )}
 
         {/* SIMULATION CONTROLS */}

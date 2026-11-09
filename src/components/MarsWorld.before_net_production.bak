@@ -1231,7 +1231,10 @@ function CompactBuildingModel({ Model, level }) {
     );
     const size = bounds.getSize(new THREE.Vector3());
     const maxHorizontal = Math.max(size.x, size.z, 0.001);
-    const factor = Math.min(0.42, (BUILDING_PLOT - 0.6) / maxHorizontal);
+    const factor = Math.min(
+      0.525,
+      (BUILDING_PLOT - 0.6) / maxHorizontal
+    ) * 1.62;
 
     root.position.set(-localCenter.x, -localBottom.y, -localCenter.z);
     fit.scale.setScalar(factor);
