@@ -1,7 +1,6 @@
 
 import {
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -22,6 +21,7 @@ import DetailedSolarModel from "./buildings/SolarModel";
 import DetailedWaterModel from "./buildings/WaterModel";
 import DetailedMineModel from "./buildings/MineModel";
 import DetailedResearchModel from "./buildings/ResearchModel";
+import CompactBuildingModel from "./buildings/shared/CompactBuildingModel";
 
 // =====================================================
 // MARS: THE NEW FRONTIER
@@ -1205,50 +1205,6 @@ const MODELS = {
 // COMPACT BUILDING FITTING SYSTEM
 // =====================================================
 
-function CompactBuildingModel({ Model, level }) {
-  const modelRoot = useRef(null);
-  const fitRoot = useRef(null);
-
-  useLayoutEffect(() => {
-    const root = modelRoot.current;
-    const fit = fitRoot.current;
-    if (!root || !fit) return;
-
-    // Measure at unit scale before applying any fitting transforms.
-    fit.scale.set(1, 1, 1);
-    root.position.set(0, 0, 0);
-    fit.updateWorldMatrix(true, true);
-
-    const bounds = new THREE.Box3().setFromObject(root);
-    if (bounds.isEmpty()) return;
-
-    // Box3 is WORLD-space. Convert its center and base to the
-    // fitting group's LOCAL space before moving the model.
-    const worldCenter = bounds.getCenter(new THREE.Vector3());
-    const localCenter = fit.worldToLocal(worldCenter.clone());
-    const localBottom = fit.worldToLocal(
-      new THREE.Vector3(worldCenter.x, bounds.min.y, worldCenter.z)
-    );
-    const size = bounds.getSize(new THREE.Vector3());
-    const maxHorizontal = Math.max(size.x, size.z, 0.001);
-    const factor = Math.min(
-      0.525,
-      (BUILDING_PLOT - 0.6) / maxHorizontal
-    ) * 1.62;
-
-    root.position.set(-localCenter.x, -localBottom.y, -localCenter.z);
-    fit.scale.setScalar(factor);
-  }, [Model, level]);
-
-  return (
-    <group ref={fitRoot}>
-      <group ref={modelRoot}>
-        <Model level={level} />
-      </group>
-    </group>
-  );
-}
-
 // =====================================================
 // BUILDING RENDERER
 // =====================================================
@@ -1305,6 +1261,7 @@ function Building({
       {/* Detailed compact architecture */}
       <CompactBuildingModel
         Model={Model}
+        plotSize={BUILDING_PLOT}
         level={building.level}
       />
 
@@ -1363,7 +1320,7 @@ function GhostBuilding({ type, validPlacement }) {
   if (!Model) return null;
   return (
     <group ref={group}>
-      <CompactBuildingModel Model={Model} level={1} />
+      <CompactBuildingModel Model={Model} level={1} plotSize={BUILDING_PLOT} />
     </group>
   );
 }

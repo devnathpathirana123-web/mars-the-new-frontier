@@ -1,0 +1,17 @@
+export const PALETTE = {
+  shell: "#d8d2c4",
+  light: "#ece7db",
+  frame: "#829096",
+  dark: "#35434b",
+  base: "#515653",
+  glass: "#284c5c",
+  copper: "#b77d54",
+  dust: "#96765d",
+  habitat: "#bd7657",
+  greenhouse: "#58a77c",
+  research: "#68cbd4",
+  mine: "#d5a348",
+  water: "#4b9fc0",
+  solar: "#d8ae61",
+  cell: "#183b65",
+};

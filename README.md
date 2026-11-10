@@ -258,3 +258,8 @@ Check the repository for a `LICENSE` file and its terms before reusing or redist
 ---
 
 **MARS: THE NEW FRONTIER** — Build a colony. Balance its resources. Make the next sol possible.
+
+
+## Refined 3D building models
+
+See [the architecture guide](docs/architecture.md) for the six building families, upgrade progression, rendered overview, and local model-review and browser-test instructions.
