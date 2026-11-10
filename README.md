@@ -53,7 +53,9 @@ Shortfalls reduce health and morale and stop growth; the current survival mode a
 
 - Choose a building in **Build**, then click a valid plot.
 - In **Operations → Utilities**, use endpoint selectors or enable the surface tool and click two buildings.
-- **Escape** cancels construction or utility drawing.
+- Select a building and open **Inspect** to move it by dragging or demolish it with confirmation. Invalid moves preserve the original layout and links.
+- Buildings use level foundation decks and ground-reaching supports to clear uneven terrain.
+- **Escape** cancels construction, utility drawing, or relocation.
 - Left drag pans; right drag rotates; scroll zooms.
 - WASD moves the camera; Q/E rotates; R resets it. Camera shortcuts ignore form inputs.
 
@@ -90,3 +92,11 @@ The dormant 2D prototype and backup world file remain in the repository; the act
 ## License
 
 [MIT](LICENSE)
+
+## Run on GitHub Pages
+
+This repository includes `.github/workflows/pages.yml`, which builds the JSX into static browser assets and deploys them with GitHub Pages. Merge the complete update into `main`, then open **Settings → Pages → Build and deployment → Source → GitHub Actions**. Push to `main` or run **Actions → Build and deploy game → Run workflow**. The successful deployment shows the game URL. Hosting has not been enabled automatically by this code change.
+
+To replace a local checkout without combining the older feature branches, download the ZIP of the complete update branch, extract it into a separate folder, and run `npm ci` followed by `npm run dev`. Keep a copy of any local edits before replacing files. The branch includes the models, gameplay engine, layout tools, menu, and all shared dependencies.
+
+Use the always-visible **MENU** and **SAVE COLONY** buttons on the map. The menu includes save-file export/import and a support-pillar visibility switch. Saves are local to each browser origin: export from localhost and import into the hosted game to transfer a colony.

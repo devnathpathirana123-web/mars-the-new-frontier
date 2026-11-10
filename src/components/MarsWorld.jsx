@@ -29,8 +29,10 @@ import {
 } from "../game/colony";
 import { terrainProfile } from "../game/networks";
 import ColonyOperations from "./ColonyOperations";
+import GameMenu from "./GameMenu";
 import Infrastructure from "./Infrastructure";
 import "./MarsWorld.css";
+import { constructionPad } from "../game/constructionPads";
 
 // =====================================================
 // MARS: THE NEW FRONTIER
@@ -232,7 +234,7 @@ function terrainHeight(x, z) {
 // TERRAIN MESH
 // =====================================================
 
-function Terrain({ onHover, onPlace }) {
+function Terrain({ onHover, onPlace, buildings }) {
   const geometry = useMemo(() => {
     const geo = new THREE.PlaneGeometry(320, 320, 180, 180);
 
@@ -330,26 +332,35 @@ function Terrain({ onHover, onPlace }) {
         <meshStandardMaterial vertexColors roughness={1} />
       </mesh>
 
-      {rocks.map((rock) => (
-        <mesh
-          key={rock.id}
-          position={[
-            rock.x,
-            terrainHeight(rock.x, rock.z) + rock.size * 0.25,
-            rock.z,
-          ]}
-          scale={[rock.size, rock.size * 0.65, rock.size * 0.8]}
-          rotation={[0.2, rock.id, 0.1]}
-          castShadow
-        >
-          <dodecahedronGeometry args={[1, 0]} />
+      {rocks
+        .filter(
+          (rock) =>
+            !buildings.some(
+              (b) =>
+                Math.abs(b.x - rock.x) < 4 + rock.size &&
+                Math.abs(b.z - rock.z) < 4 + rock.size,
+            ),
+        )
+        .map((rock) => (
+          <mesh
+            key={rock.id}
+            position={[
+              rock.x,
+              terrainHeight(rock.x, rock.z) + rock.size * 0.25,
+              rock.z,
+            ]}
+            scale={[rock.size, rock.size * 0.65, rock.size * 0.8]}
+            rotation={[0.2, rock.id, 0.1]}
+            castShadow
+          >
+            <dodecahedronGeometry args={[1, 0]} />
 
-          <meshStandardMaterial
-            color={rock.id % 3 === 0 ? "#684638" : "#89604a"}
-            roughness={1}
-          />
-        </mesh>
-      ))}
+            <meshStandardMaterial
+              color={rock.id % 3 === 0 ? "#684638" : "#89604a"}
+              roughness={1}
+            />
+          </mesh>
+        ))}
     </group>
   );
 }
@@ -375,19 +386,24 @@ const MODELS = {
 // BUILDING RENDERER
 // =====================================================
 
-function Building({ building, selected, onSelect, status }) {
+function Building({ building, selected, onSelect, status, supports, onHover }) {
   const Model = MODELS[building.type];
 
-  if (!Model) {
-    return null;
-  }
+  const pad = useMemo(
+    () => constructionPad(building, terrainHeight),
+    [building],
+  );
+  if (!Model) return null;
 
-  const groundHeight = terrainHeight(building.x, building.z);
+  const groundHeight = pad.top;
 
   return (
     <group
       position={[building.x, groundHeight, building.z]}
 
+      onPointerMove={(event) => {
+        if (onHover?.(building.x, building.z)) event.stopPropagation();
+      }}
       onClick={(event) => {
         event.stopPropagation();
 
@@ -398,6 +414,33 @@ function Building({ building, selected, onSelect, status }) {
         onSelect(building.id);
       }}
     >
+      <mesh position={[0, -0.17, 0]} receiveShadow castShadow>
+        <boxGeometry args={[6.9, 0.34, 6.9]} />
+        <meshStandardMaterial color="#555e60" roughness={0.85} />
+      </mesh>
+      {supports &&
+        [-3.1, 0, 3.1].flatMap((x) =>
+          [-3.1, 3.1].map((z) => {
+            const foot =
+              terrainHeight(building.x + x, building.z + z) - groundHeight;
+            const height = -0.25 - foot;
+            if (height < 0.12) return null;
+            return (
+              <mesh
+                key={`${x}-${z}`}
+                position={[x, foot + height / 2, z]}
+                castShadow
+              >
+                <boxGeometry args={[0.3, height, 0.3]} />
+                <meshStandardMaterial
+                  color="#55646b"
+                  metalness={0.6}
+                  roughness={0.5}
+                />
+              </mesh>
+            );
+          }),
+        )}
       {/* Selected building indicator */}
       {selected && (
         <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.12, 0]}>
@@ -535,7 +578,7 @@ function PlacementPreview({ cursor, validPlacement, type }) {
 // PHASE 6 — FREE STRATEGY CAMERA
 // =====================================================
 
-function FreeCameraControls() {
+function FreeCameraControls({ enabled = true }) {
   const controls = useRef(null);
   const { camera } = useThree();
 
@@ -587,6 +630,7 @@ function FreeCameraControls() {
   }, []);
 
   useFrame((_, delta) => {
+    if (!enabled) return;
     const control = controls.current;
 
     if (!control) {
@@ -662,6 +706,7 @@ function FreeCameraControls() {
       ref={controls}
       makeDefault
       enableDamping
+      enabled={enabled}
       dampingFactor={0.08}
       enablePan
       enableRotate
@@ -763,6 +808,73 @@ function snapToGrid(value) {
   return Math.round(value / GRID) * GRID;
 }
 
+function BuildingDrag({ building, onPreview, onDrop }) {
+  const { camera, gl } = useThree();
+  const top = constructionPad(building, terrainHeight).top;
+  useEffect(() => {
+    const canvas = gl.domElement;
+    let dragging = false;
+    let offset = [0, 0];
+    const ray = new THREE.Raycaster(),
+      point = new THREE.Vector3();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -top);
+    const pick = (e) => {
+      const r = canvas.getBoundingClientRect();
+      ray.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - r.left) / r.width) * 2 - 1,
+          (-(e.clientY - r.top) / r.height) * 2 + 1,
+        ),
+        camera,
+      );
+      if (!ray.ray.intersectPlane(plane, point)) return null;
+      return [point.x, point.z];
+    };
+    const down = (e) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      canvas.setPointerCapture(e.pointerId);
+      const p = pick(e);
+      if (p) {
+        offset = [building.x - p[0], building.z - p[1]];
+        onPreview(building.x, building.z);
+      }
+    };
+    const move = (e) => {
+      if (!dragging) return;
+      const p = pick(e);
+      if (p) onPreview(p[0] + offset[0], p[1] + offset[1]);
+    };
+    const up = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      const p = pick(e);
+      if (canvas.hasPointerCapture(e.pointerId))
+        canvas.releasePointerCapture(e.pointerId);
+      if (p)
+        onDrop(
+          building.id,
+          snapToGrid(p[0] + offset[0]),
+          snapToGrid(p[1] + offset[1]),
+        );
+    };
+    const cancel = () => {
+      dragging = false;
+    };
+    canvas.addEventListener("pointerdown", down);
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointercancel", cancel);
+    return () => {
+      canvas.removeEventListener("pointerdown", down);
+      canvas.removeEventListener("pointermove", move);
+      canvas.removeEventListener("pointerup", up);
+      canvas.removeEventListener("pointercancel", cancel);
+    };
+  }, [camera, gl, building.id, building.x, building.z, top, onDrop, onPreview]);
+  return null;
+}
+
 function MarsScene({
   game,
   selectedId,
@@ -773,7 +885,26 @@ function MarsScene({
   networkMode,
   networkSource,
   report,
+  movingId,
+  onMove,
 }) {
+  const [supports, setSupports] = useState(true);
+  useEffect(() => {
+    const listener = (e) => setSupports(e.detail);
+    window.addEventListener("mars-support-visibility", listener);
+    return () =>
+      window.removeEventListener("mars-support-visibility", listener);
+  }, []);
+  const moving = game.buildings.find((b) => b.id === movingId);
+  const [movePreview, setMovePreview] = useState(null);
+  const previewMove = useCallback(
+    (x, z) =>
+      setMovePreview({
+        id: movingId,
+        position: [snapToGrid(x), 0, snapToGrid(z)],
+      }),
+    [movingId],
+  );
   const storm = report?.weather?.kind === "storm";
   const dust = report?.weather?.kind === "dust";
   const sky = storm ? "#4f382b" : dust ? "#302018" : "#120e0d";
@@ -844,14 +975,16 @@ function MarsScene({
   }, [hoveredPosition, placementMode, game]);
 
   const handleHover = (x, z) => {
-    if (!placementMode) {
-      return;
-    }
+    if (!placementMode && !networkMode) return;
 
     const snappedX = snapToGrid(x);
     const snappedZ = snapToGrid(z);
 
-    const position = [snappedX, terrainHeight(snappedX, snappedZ), snappedZ];
+    const position = [
+      snappedX,
+      constructionPad({ x: snappedX, z: snappedZ }, terrainHeight).top,
+      snappedZ,
+    ];
 
     setHoveredPosition(position);
 
@@ -913,10 +1046,21 @@ function MarsScene({
       <Stars radius={250} depth={80} count={1500} factor={3} fade />
 
       {/* FREE CAMERA */}
-      <FreeCameraControls />
+      <FreeCameraControls enabled={!moving} />
+      {moving && (
+        <BuildingDrag
+          building={moving}
+          onPreview={previewMove}
+          onDrop={onMove}
+        />
+      )}
 
       {/* MARS SURFACE */}
-      <Terrain onHover={handleHover} onPlace={handlePlace} />
+      <Terrain
+        onHover={handleHover}
+        onPlace={handlePlace}
+        buildings={game.buildings}
+      />
 
       {/* EXPANDABLE TERRITORY */}
       <TerritoryBoundary population={game.colony.population} />
@@ -926,18 +1070,53 @@ function MarsScene({
         heightAt={terrainHeight}
         activeKind={networkMode}
         report={report}
+        previewFrom={networkSource}
+        previewPoint={hoveredPosition}
       />
       {/* EXISTING BUILDINGS */}
       {game.buildings.map((building) => (
         <Building
           key={building.id}
           building={building}
+          supports={supports}
+          onHover={(x, z) => {
+            if (networkMode) {
+              handleHover(x, z);
+              return true;
+            }
+            return false;
+          }}
           status={report?.buildings?.find((b) => b.id === building.id)}
           selected={selectedId === building.id || networkSource === building.id}
           onSelect={onSelectBuilding}
         />
       ))}
 
+      {moving && movePreview?.id === moving.id && (
+        <PlacementPreview
+          type={moving.type}
+          cursor={[
+            movePreview.position[0],
+            constructionPad(
+              {
+                ...moving,
+                x: movePreview.position[0],
+                z: movePreview.position[2],
+              },
+              terrainHeight,
+            ).top,
+            movePreview.position[2],
+          ]}
+          validPlacement={
+            dispatchColony(game, {
+              type: "move",
+              id: moving.id,
+              x: movePreview.position[0],
+              z: movePreview.position[2],
+            }).game !== game
+          }
+        />
+      )}
       {/* CONSTRUCTION PREVIEW */}
       {placementMode && hoveredPosition && (
         <PlacementPreview
@@ -959,6 +1138,7 @@ function useMarsGame() {
   const [selectedId, setSelectedId] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
   const [networkMode, setNetworkMode] = useState(null);
+  const [movingId, setMovingId] = useState(null);
   const [networkSource, setNetworkSource] = useState(null);
   const [notification, setNotification] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -993,6 +1173,7 @@ function useMarsGame() {
     return () => window.clearInterval(timer);
   }, [hasGame, dispatch]);
   const cancelModes = useCallback(() => {
+    setMovingId(null);
     setPlacementMode(null);
     setNetworkMode(null);
     setNetworkSource(null);
@@ -1015,12 +1196,14 @@ function useMarsGame() {
     );
   };
   const chooseNetwork = (kind) => {
+    setMovingId(null);
     setNetworkMode(kind);
     setNetworkSource(null);
     setPlacementMode(null);
     setActivePanel("operations");
   };
   const selectBuilding = (id) => {
+    if (movingId) return;
     setSelectedId(id);
     setPlacementMode(null);
     if (networkMode) {
@@ -1060,6 +1243,35 @@ function useMarsGame() {
     )
       startGame(game.mode);
   };
+  const moveBuilding = useCallback(
+    (id, x, z) => {
+      const before = gameRef.current;
+      const result = dispatch({ type: "move", id, x, z });
+      if (result?.game !== before) setMovingId(null);
+    },
+    [dispatch],
+  );
+  const beginMove = (id) => {
+    cancelModes();
+    setMovingId(id);
+    setNotification(
+      "Drag on the map to relocate the selected building. Green = valid; red = blocked. Escape cancels. Existing utilities must remain valid.",
+    );
+  };
+  const demolishBuilding = (id) => {
+    if (
+      !window.confirm(
+        "Demolish this building? Attached utility links and its stored energy will be removed. Recover 50% of its original metal cost (none in sandbox).",
+      )
+    )
+      return;
+    const before = gameRef.current;
+    const result = dispatch({ type: "demolish", id });
+    if (result?.game !== before) {
+      cancelModes();
+      setSelectedId(null);
+    }
+  };
   const report = useMemo(() => (game ? getColonyReport(game) : null), [game]);
   return {
     game,
@@ -1078,6 +1290,36 @@ function useMarsGame() {
     startGame,
     placeBuilding,
     selectBuilding,
+    movingId,
+    moveBuilding,
+    beginMove,
+    demolishBuilding,
+    restoreGame: (data) => {
+      const restored = validateSave(data);
+      if (!restored) {
+        setNotification("Invalid save file. Current colony kept.");
+        return false;
+      }
+      if (
+        !window.confirm(
+          "Replace the current colony with this save? Export a backup first to keep your current progress.",
+        )
+      )
+        return false;
+      commit(restored);
+      cancelModes();
+      setSelectedId(null);
+      return true;
+    },
+    title: () => {
+      cancelModes();
+      gameRef.current = null;
+      setGame(null);
+    },
+    continueGame: () => {
+      const saved = loadSavedGame();
+      if (saved) commit(saved);
+    },
     upgradeBuilding: (id) => dispatch({ type: "upgrade", id }),
     unlockTechnology: (id) => dispatch({ type: "research", id }),
     togglePause: () => dispatch({ type: "pause" }),
@@ -1297,7 +1539,7 @@ function BuildingCatalogue({ game, placementMode, onChoose }) {
 // SELECTED BUILDING INSPECTOR
 // =====================================================
 
-function BuildingInspector({ building, game, onUpgrade }) {
+function BuildingInspector({ building, game, onUpgrade, onMove, onDemolish }) {
   if (!building) {
     return (
       <div style={UI.card}>
@@ -1357,6 +1599,25 @@ function BuildingInspector({ building, game, onUpgrade }) {
         Location: {building.x}, {building.z}
       </p>
 
+      <button
+        type="button"
+        style={UI.button}
+        onClick={() => onMove(building.id)}
+      >
+        MOVE BUILDING
+      </button>
+      <button
+        type="button"
+        style={{ ...UI.button, background: "#502d2b" }}
+        onClick={() => onDemolish(building.id)}
+      >
+        DEMOLISH BUILDING
+      </button>
+      <p style={UI.small}>
+        Moving is free and retains upgrades and crew. Demolition removes
+        attached links and recovers 50% of the original metal cost; stored
+        energy is lost. Your last occupied habitat is protected.
+      </p>
       {maximum ? (
         <strong style={{ color: "#89dfb2" }}>MAXIMUM LEVEL REACHED</strong>
       ) : (
@@ -1705,6 +1966,13 @@ export default function MarsWorld() {
     placeBuilding,
     selectBuilding,
     upgradeBuilding,
+    restoreGame,
+    title,
+    continueGame,
+    movingId,
+    moveBuilding,
+    beginMove,
+    demolishBuilding,
     unlockTechnology,
 
     togglePause,
@@ -1782,6 +2050,11 @@ export default function MarsWorld() {
           >
             START SURVIVAL COLONY
           </button>
+          {loadSavedGame() && (
+            <button style={UI.button} onClick={continueGame}>
+              CONTINUE SAVED COLONY
+            </button>
+          )}
 
           <button
             type="button"
@@ -1930,6 +2203,8 @@ export default function MarsWorld() {
             building={selectedBuilding}
             game={game}
             onUpgrade={upgradeBuilding}
+            onMove={beginMove}
+            onDemolish={demolishBuilding}
           />
         )}
 
@@ -2012,6 +2287,13 @@ export default function MarsWorld() {
 
       {/* 3D WORLD */}
       <main style={UI.world} className="mars-world">
+        <GameMenu
+          game={game}
+          saveError={saveError}
+          onRestore={restoreGame}
+          onNotify={setNotification}
+          onTitle={title}
+        />
         <MarsScene
           game={game}
           selectedId={selectedId}
@@ -2022,6 +2304,8 @@ export default function MarsWorld() {
           networkMode={networkMode}
           networkSource={networkSource}
           report={report}
+          movingId={movingId}
+          onMove={moveBuilding}
         />
         {placementMode && hoveredPlot && (
           <PlotReadout
@@ -2029,6 +2313,12 @@ export default function MarsWorld() {
             type={placementMode}
             position={hoveredPlot}
           />
+        )}
+        {movingId && (
+          <div className="mars-link-hint" role="status">
+            MOVING #{movingId} · Drag to a green plot. Escape cancels.
+            <button onClick={cancelModes}>Cancel move</button>
+          </div>
         )}
         {networkMode && (
           <div className="mars-link-hint" role="status">
@@ -2116,6 +2406,7 @@ export default function MarsWorld() {
         {notification && (
           <div
             role="status"
+            className="mars-notification"
             aria-live="polite"
             style={{
               position: "absolute",

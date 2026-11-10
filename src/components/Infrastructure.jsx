@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import * as THREE from "three";
-import { networkStatus } from "../game/networks";
+import { networkStatus, validateLink } from "../game/networks";
 
 const COLORS = { power: "#e6b863", water: "#55bddd", corridor: "#92c6ae" };
 const RADIUS = { power: 0.045, water: 0.075, corridor: 0.38 };
@@ -31,15 +31,30 @@ class TerrainRoute extends THREE.Curve {
   }
 }
 
-function UtilityRoute({ from, to, kind, heightAt, active, dimmed }) {
+function UtilityRoute({
+  from,
+  to,
+  kind,
+  heightAt,
+  active,
+  dimmed,
+  preview = false,
+  valid = true,
+}) {
   const curve = useMemo(() => {
     if (Math.hypot(to.x - from.x, to.z - from.z) < 0.001) return null;
     return new TerrainRoute(from, to, kind, heightAt);
   }, [from, to, kind, heightAt]);
   if (!curve) return null;
-  const radius = RADIUS[kind];
+  const radius = RADIUS[kind] * (preview ? 1.7 : 1);
   const segments = Math.max(32, Math.ceil(curve.distance * 4));
-  const color = active ? COLORS[kind] : "#62666a";
+  const color = preview
+    ? valid
+      ? "#74ffd1"
+      : "#ff927b"
+    : active
+      ? COLORS[kind]
+      : "#62666a";
   // Close support spacing also keeps a long pressurized route visually grounded.
   const supportCount = Math.max(2, Math.ceil((curve.distance - 6.24) / 4) + 1);
   return (
@@ -52,11 +67,15 @@ function UtilityRoute({ from, to, kind, heightAt, active, dimmed }) {
           color={color}
           metalness={0.35}
           roughness={0.65}
-          transparent={dimmed}
-          opacity={dimmed ? 0.25 : 1}
+          transparent={preview || dimmed}
+          depthWrite={!preview}
+          wireframe={preview}
+          emissive={preview ? color : "#000000"}
+          emissiveIntensity={preview ? 0.5 : 0}
+          opacity={preview ? 0.55 : dimmed ? 0.25 : 1}
         />
       </mesh>
-      {Array.from({ length: supportCount }, (_, i) => {
+      {Array.from({ length: preview ? 0 : supportCount }, (_, i) => {
         const point = curve.getPoint(i / (supportCount - 1));
         const ground = heightAt(point.x, point.z);
         const bottom = ground + 0.025;
@@ -105,13 +124,48 @@ function UtilityRoute({ from, to, kind, heightAt, active, dimmed }) {
   );
 }
 
-export default function Infrastructure({ game, heightAt, activeKind, report }) {
+export default function Infrastructure({
+  game,
+  heightAt,
+  activeKind,
+  report,
+  previewFrom,
+  previewPoint,
+}) {
   const status = useMemo(() => networkStatus(game), [game]);
   const buildings = new Map(
     game.buildings.map((building) => [building.id, building]),
   );
   return (
     <group name="colony-infrastructure">
+      {activeKind &&
+        previewFrom &&
+        previewPoint &&
+        buildings.get(previewFrom) &&
+        (() => {
+          const from = buildings.get(previewFrom);
+          const target = [...buildings.values()].find(
+            (b) => b.x === previewPoint[0] && b.z === previewPoint[2],
+          );
+          const to = target ?? { x: previewPoint[0], z: previewPoint[2] };
+          return (
+            <UtilityRoute
+              from={from}
+              to={to}
+              kind={activeKind}
+              heightAt={heightAt}
+              preview
+              valid={Boolean(
+                target &&
+                validateLink(game, {
+                  kind: activeKind,
+                  from: from.id,
+                  to: target.id,
+                }).valid,
+              )}
+            />
+          );
+        })()}
       {(game.links ?? []).map((link) => {
         const from = buildings.get(link.from),
           to = buildings.get(link.to);

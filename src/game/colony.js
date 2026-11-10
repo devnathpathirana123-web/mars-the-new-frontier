@@ -1183,6 +1183,70 @@ export function dispatchColony(game, action) {
       message = `${CATALOG[action.buildingType].name} constructed. Connect its utilities to begin operation.`;
       break;
     }
+    case "demolish": {
+      if (!building) return reject("Select an existing building to demolish.");
+      if (
+        building.type === "habitat" &&
+        next.buildings.filter((b) => b.type === "habitat").length === 1 &&
+        next.colony.population > 0
+      )
+        return reject(
+          "Build another habitat before demolishing your last occupied habitat.",
+        );
+      next.buildings = next.buildings.filter((b) => b.id !== building.id);
+      next.links = next.links.filter(
+        (l) => l.from !== building.id && l.to !== building.id,
+      );
+      const lost = next.energyStorage?.[building.id] ?? 0;
+      next.resources.energy = Math.max(0, next.resources.energy - lost);
+      delete next.energyStorage[building.id];
+      const salvage = Math.floor(CATALOG[building.type].cost.metal * 0.5);
+      if (!freeBuild(next))
+        next.resources.metal = Math.min(
+          LIMITS.metal,
+          next.resources.metal + salvage,
+        );
+      message = `${CATALOG[building.type].name} demolished. Attached links removed; ${freeBuild(next) ? 0 : salvage} metal recovered. Stored energy at this building was lost.`;
+      break;
+    }
+    case "move": {
+      if (!building) return reject("Select an existing building to move.");
+      if (![action.x, action.z].every((n) => Number.isFinite(n) && n % 8 === 0))
+        return reject("Choose a valid construction grid position.");
+      const width =
+        next.colony.population >= 5000
+          ? 240
+          : next.colony.population >= 1500
+            ? 170
+            : next.colony.population >= 500
+              ? 120
+              : 80;
+      if (
+        Math.abs(action.x) > width / 2 - 3.75 ||
+        Math.abs(action.z) > width / 2 - 3.75
+      )
+        return reject("Keep the building inside colony territory.");
+      if (
+        next.buildings.some(
+          (b) =>
+            b.id !== building.id &&
+            Math.abs(b.x - action.x) < 7.5 &&
+            Math.abs(b.z - action.z) < 7.5,
+        )
+      )
+        return reject("Another building occupies this plot.");
+      if (building.x === action.x && building.z === action.z)
+        return reject("Choose a different plot.");
+      building.x = action.x;
+      building.z = action.z;
+      const geometry = { ...next, links: [] };
+      if (next.links.some((l) => !validateLink(geometry, l).valid))
+        return reject(
+          "Moving here would stretch or obstruct a utility link. Remove affected links first.",
+        );
+      message = `${CATALOG[building.type].name} relocated. Connections and crew retained; site yield updated.`;
+      break;
+    }
     case "upgrade": {
       if (!building) return reject("Select a building to upgrade.");
       if (building.level >= CATALOG[building.type].max)
