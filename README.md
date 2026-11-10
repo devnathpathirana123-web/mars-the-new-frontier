@@ -4,6 +4,10 @@ A browser-based Mars colony builder built with React, Three.js, and React Three 
 
 ![Connected colony gameplay](docs/gameplay-preview.png)
 
+## Future development
+
+See the [V2 roadmap](docs/V2_ROADMAP.md) for the planned health and life-support system, multiple colonies, logistics, and release criteria. Roadmap items are proposals, not implemented features.
+
 ## Run locally
 
 Use a current Node.js LTS release (Node 22.12+ or Node 24 recommended).
