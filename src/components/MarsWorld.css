@@ -1,0 +1,141 @@
+.mars-sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: #745540 #101720;
+}
+.mars-shell button:focus-visible,
+.mars-shell select:focus-visible,
+.mars-shell input:focus-visible {
+  outline: 2px solid #e9b077;
+  outline-offset: 3px;
+}
+.mars-building-label {
+  min-width: 180px;
+  max-width: 240px;
+  padding: 10px 14px;
+  border: 1px solid #b58a67;
+  border-radius: 9px;
+  background: #101b23ed;
+  color: #f2e6d5;
+  text-align: center;
+  font: 600 12px system-ui;
+  box-shadow: 0 8px 24px #0005;
+}
+.mars-building-label small {
+  display: block;
+  margin-top: 5px;
+  color: #b6c7ca;
+  font-weight: 400;
+}
+.mars-link-hint,
+.mars-plot-readout {
+  position: absolute;
+  bottom: 24px;
+  left: 20px;
+  z-index: 2;
+  max-width: calc(100% - 48px);
+  padding: 14px 18px;
+  color: #f6e7d2;
+  background: #10202aef;
+  border: 1px solid #ab835f;
+  border-radius: 10px;
+  font: 12px system-ui;
+  box-sizing: border-box;
+  box-shadow: 0 6px 20px #0004;
+}
+.mars-link-hint button {
+  margin-left: 12px;
+  border: 1px solid #8f725b;
+  border-radius: 5px;
+  padding: 5px 9px;
+  background: #3d3028;
+  color: #f6e7d2;
+  cursor: pointer;
+}
+.mars-plot-readout {
+  pointer-events: none;
+}
+.mars-plot-readout span,
+.mars-plot-readout small {
+  display: block;
+  margin-top: 6px;
+}
+.mars-plot-readout span {
+  color: #b2dfc0;
+}
+.mars-plot-readout small {
+  color: #b0c3c7;
+}
+@media (max-width: 700px) {
+  .mars-shell {
+    flex-direction: column-reverse;
+    height: 100dvh !important;
+  }
+  .mars-sidebar {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 48dvh !important;
+    flex: none;
+    border-top: 1px solid #4f4239;
+    padding: 14px !important;
+  }
+  .mars-world {
+    height: 52dvh !important;
+    min-height: 240px;
+    flex: none !important;
+  }
+  .mars-world > div[style*="right: 18px"][style*="bottom: 18px"] {
+    display: none;
+  }
+  .mars-plot-readout,
+  .mars-link-hint {
+    bottom: 12px;
+    left: 12px;
+  }
+}
+.mars-game-toolbar {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  z-index: 5;
+  display: flex;
+  gap: 8px;
+}
+.mars-game-toolbar button,
+.mars-menu button {
+  background: #263b47;
+  color: #fff;
+  border: 1px solid #9b7c60;
+  border-radius: 7px;
+  padding: 10px 14px;
+  cursor: pointer;
+  font: 700 12px system-ui;
+}
+.mars-notification {
+  top: 70px !important;
+}
+.mars-menu {
+  background: #14232d;
+  color: #e6e6db;
+  border: 1px solid #a7825f;
+  border-radius: 14px;
+  padding: 25px;
+  max-width: min(420px, 80vw);
+  font: 14px system-ui;
+}
+.mars-menu::backdrop {
+  background: #000a;
+}
+.mars-menu button {
+  display: block;
+  width: 100%;
+  margin: 9px 0;
+}
+.mars-menu p {
+  color: #b0c4ca;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.mars-menu label {
+  display: block;
+  margin-top: 20px;
+}

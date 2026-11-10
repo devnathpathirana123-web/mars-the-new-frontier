@@ -1,19 +1,8 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Canvas, useFrame, useThree } from "@react-three/fiber";
 
-import {
-  Canvas,
-  useFrame,
-  useThree,
-} from "@react-three/fiber";
-
-import { MapControls, Stars } from "@react-three/drei";
+import { MapControls, Stars, Html } from "@react-three/drei";
 import * as THREE from "three";
 
 import DetailedHabitatModel from "./buildings/HabitatModel";
@@ -22,6 +11,28 @@ import DetailedSolarModel from "./buildings/SolarModel";
 import DetailedWaterModel from "./buildings/WaterModel";
 import DetailedMineModel from "./buildings/MineModel";
 import DetailedResearchModel from "./buildings/ResearchModel";
+import CompactBuildingModel from "./buildings/shared/CompactBuildingModel";
+
+import {
+  CATALOG,
+  TECHNOLOGIES,
+  freshGame,
+  validateSave,
+  output,
+  energyCost,
+  upgradeCost,
+  canAfford,
+  simulateSol,
+  calculateSatisfaction,
+  dispatchColony,
+  getColonyReport,
+} from "../game/colony";
+import { terrainProfile } from "../game/networks";
+import ColonyOperations from "./ColonyOperations";
+import GameMenu from "./GameMenu";
+import Infrastructure from "./Infrastructure";
+import "./MarsWorld.css";
+import { constructionPad } from "../game/constructionPads";
 
 // =====================================================
 // MARS: THE NEW FRONTIER
@@ -29,7 +40,7 @@ import DetailedResearchModel from "./buildings/ResearchModel";
 // =====================================================
 
 const SAVE_KEY = "mars-new-frontier-save-v2";
-const SAVE_VERSION = 2;
+const SAVE_VERSION = 3;
 
 const SOL_DURATION = 5000;
 const GRID = 8;
@@ -74,22 +85,15 @@ function territoryFor(population) {
 // CONSTRUCTION COLLISION SYSTEM
 // =====================================================
 
-function footprintCollision(
-  buildings,
-  x,
-  z,
-  ignoreId = null
-) {
+function footprintCollision(buildings, x, z, ignoreId = null) {
   return buildings.some((building) => {
     if (building.id === ignoreId) {
       return false;
     }
 
-    const overlapX =
-      Math.abs(building.x - x) < BUILDING_PLOT;
+    const overlapX = Math.abs(building.x - x) < BUILDING_PLOT;
 
-    const overlapZ =
-      Math.abs(building.z - z) < BUILDING_PLOT;
+    const overlapZ = Math.abs(building.z - z) < BUILDING_PLOT;
 
     return overlapX && overlapZ;
   });
@@ -100,438 +104,12 @@ function insideTerritory(x, z, population) {
   const half = territory.width / 2;
   const margin = BUILDING_PLOT / 2;
 
-  return (
-    Math.abs(x) + margin <= half &&
-    Math.abs(z) + margin <= half
-  );
+  return Math.abs(x) + margin <= half && Math.abs(z) + margin <= half;
 }
 
 // =====================================================
 // CITIZEN SATISFACTION FRAMEWORK
 // =====================================================
-
-function calculateSatisfaction(game) {
-  const population = game.colony.population;
-
-  const housingCapacity = game.buildings
-    .filter((building) => building.type === "habitat")
-    .reduce(
-      (total, building) =>
-        total + HOUSING[building.level],
-      0
-    );
-
-  const housing = population
-    ? Math.min(
-        100,
-        Math.round(
-          (100 * housingCapacity) / population
-        )
-      )
-    : 100;
-
-  const essentials = population
-    ? Math.min(
-        100,
-        Math.round(
-          (100 *
-            Math.min(
-              game.resources.food,
-              game.resources.water
-            )) /
-            population
-        )
-      )
-    : 100;
-
-  const solarProduction = game.buildings
-    .filter((building) => building.type === "solar")
-    .reduce(
-      (total, building) =>
-        total + output(building, game.technologies),
-      0
-    );
-
-  const energyDemand = game.buildings.reduce(
-    (total, building) =>
-      total + energyCost(building),
-    0
-  );
-
-  const energy = energyDemand
-    ? Math.min(
-        100,
-        Math.round(
-          (100 * solarProduction) / energyDemand
-        )
-      )
-    : 100;
-
-  const indicators = [
-    {
-      id: "housing",
-      label: "Housing quality",
-      value: housing,
-      implemented: true,
-    },
-    {
-      id: "essentials",
-      label: "Food & water security",
-      value: essentials,
-      implemented: true,
-    },
-    {
-      id: "energy",
-      label: "Energy reliability",
-      value: energy,
-      implemented: true,
-    },
-    {
-      id: "healthcare",
-      label: "Healthcare",
-      value: null,
-      implemented: false,
-    },
-    {
-      id: "recreation",
-      label: "Recreation & community",
-      value: null,
-      implemented: false,
-    },
-  ];
-
-  const active = indicators.filter(
-    (indicator) => indicator.implemented
-  );
-
-  const overall = Math.round(
-    active.reduce(
-      (total, indicator) =>
-        total + indicator.value,
-      0
-    ) / active.length
-  );
-
-  return {
-    indicators,
-    overall,
-  };
-}
-
-const START_RESOURCES = {
-  metal: 600,
-  energy: 300,
-  water: 200,
-  food: 200,
-  research: 0,
-};
-
-const LIMITS = {
-  metal: 10000,
-  energy: 6000,
-  water: 6000,
-  food: 6000,
-  research: 10000,
-};
-
-const CATALOG = {
-  habitat: {
-    name: "Habitat",
-    icon: "⌂",
-    max: 15,
-    cost: { metal: 55, energy: 12 },
-    base: 8,
-  },
-  solar: {
-    name: "Solar Array",
-    icon: "☀",
-    max: 10,
-    cost: { metal: 40, energy: 8 },
-    base: 24,
-  },
-  extractor: {
-    name: "Water Plant",
-    icon: "◉",
-    max: 15,
-    cost: { metal: 45, energy: 10 },
-    base: 15,
-  },
-  greenhouse: {
-    name: "Greenhouse",
-    icon: "♧",
-    max: 10,
-    cost: { metal: 50, energy: 12 },
-    base: 12,
-  },
-  mine: {
-    name: "Mining Facility",
-    icon: "◇",
-    max: 15,
-    cost: { metal: 65, energy: 15 },
-    base: 18,
-  },
-  research: {
-    name: "Research Centre",
-    icon: "✧",
-    max: 15,
-    cost: { metal: 70, energy: 18 },
-    base: 8,
-  },
-};
-
-const TECHNOLOGIES = [
-  {
-    id: "solarEfficiency",
-    name: "Solar Efficiency",
-    description: "Increase solar power production.",
-    cost: 100,
-  },
-  {
-    id: "waterRecycling",
-    name: "Water Recycling",
-    description: "Increase water extraction output.",
-    cost: 150,
-  },
-  {
-    id: "agriculture",
-    name: "Advanced Agriculture",
-    description: "Improve greenhouse food production.",
-    cost: 200,
-  },
-  {
-    id: "mining",
-    name: "Automated Mining",
-    description: "Increase metal production.",
-    cost: 250,
-  },
-  {
-    id: "research",
-    name: "Research Optimization",
-    description: "Increase research point production.",
-    cost: 300,
-  },
-];
-
-const HOUSING = [
-  0, 8, 12, 18, 26, 36, 48, 64,
-  82, 104, 130, 160, 195, 235, 280, 340,
-];
-
-const FOOD = [
-  0, 12, 24, 36, 55, 75,
-  105, 135, 170, 210, 260,
-];
-
-const PANEL = {
-  background: "rgba(11, 18, 27, 0.94)",
-  border: "1px solid rgba(255,255,255,0.1)",
-  borderRadius: 14,
-  padding: 18,
-};
-
-const BUTTON = {
-  padding: "10px 14px",
-  borderRadius: 8,
-  border: "1px solid rgba(255,255,255,0.14)",
-  background: "#263849",
-  color: "#ffffff",
-  cursor: "pointer",
-  fontWeight: 700,
-};
-
-function freshGame(mode) {
-  return {
-    version: SAVE_VERSION,
-    mode,
-    sol: 1,
-    paused: false,
-    sandboxSurvival: false,
-
-    resources: { ...START_RESOURCES },
-
-    colony: {
-      population: 4,
-      health: 100,
-      stableSols: 0,
-    },
-
-    technologies: {
-      solarEfficiency: false,
-      waterRecycling: false,
-      agriculture: false,
-      mining: false,
-      research: false,
-    },
-
-    buildings: [
-      {
-        id: 1,
-        type: "habitat",
-        level: 1,
-        x: 0,
-        z: 0,
-      },
-    ],
-
-    nextId: 2,
-  };
-}
-
- // =====================================================
- // PHASE 6 — SAVE SYSTEM AND VALIDATION
- // =====================================================
-
-function validateSave(data) {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  if (data.version !== SAVE_VERSION) {
-    return null;
-  }
-
-  if (!["survival", "sandbox"].includes(data.mode)) {
-    return null;
-  }
-
-  const defaults = freshGame(data.mode);
-
-  if (
-    !data.resources ||
-    !data.colony ||
-    !data.technologies ||
-    !Array.isArray(data.buildings)
-  ) {
-    return null;
-  }
-
-  const validNumber = (value, min, max) =>
-    typeof value === "number" &&
-    Number.isFinite(value) &&
-    value >= min &&
-    value <= max;
-
-  const resources = {};
-
-  for (const [key, limit] of Object.entries(LIMITS)) {
-    const value = data.resources[key];
-
-    if (!validNumber(value, 0, limit)) {
-      return null;
-    }
-
-    resources[key] = value;
-  }
-
-  const population = data.colony.population;
-  const health = data.colony.health;
-  const stableSols = data.colony.stableSols;
-
-  if (
-    !validNumber(population, 0, 1000000) ||
-    !validNumber(health, 0, 100) ||
-    !validNumber(stableSols, 0, 1000000)
-  ) {
-    return null;
-  }
-
-  const buildings = [];
-  const usedIds = new Set();
-
-  for (const building of data.buildings) {
-    if (!building || typeof building !== "object") {
-      return null;
-    }
-
-    const definition = CATALOG[building.type];
-
-    if (!definition) {
-      return null;
-    }
-
-    if (
-      !Number.isInteger(building.id) ||
-      building.id < 1 ||
-      usedIds.has(building.id)
-    ) {
-      return null;
-    }
-
-    if (
-      !Number.isInteger(building.level) ||
-      building.level < 1 ||
-      building.level > definition.max
-    ) {
-      return null;
-    }
-
-    if (
-      !validNumber(building.x, -160, 160) ||
-      !validNumber(building.z, -160, 160)
-    ) {
-      return null;
-    }
-
-    usedIds.add(building.id);
-
-    buildings.push({
-      id: building.id,
-      type: building.type,
-      level: building.level,
-      x: building.x,
-      z: building.z,
-    });
-  }
-
-  const technologies = {
-    ...defaults.technologies,
-  };
-
-  for (const key of Object.keys(technologies)) {
-    if (typeof data.technologies[key] === "boolean") {
-      technologies[key] = data.technologies[key];
-    }
-  }
-
-  const highestId = Math.max(
-    0,
-    ...buildings.map((building) => building.id)
-  );
-
-  const nextId =
-    Number.isInteger(data.nextId) &&
-    data.nextId > highestId
-      ? data.nextId
-      : highestId + 1;
-
-  return {
-    version: SAVE_VERSION,
-    mode: data.mode,
-
-    sol:
-      Number.isInteger(data.sol) && data.sol >= 1
-        ? data.sol
-        : 1,
-
-    paused: Boolean(data.paused),
-
-    sandboxSurvival: Boolean(data.sandboxSurvival),
-
-    resources,
-
-    colony: {
-      population,
-      health,
-      stableSols,
-    },
-
-    technologies,
-
-    buildings,
-
-    nextId,
-  };
-}
 
 function loadSavedGame() {
   try {
@@ -541,7 +119,18 @@ function loadSavedGame() {
       return null;
     }
 
-    return validateSave(JSON.parse(raw));
+    const data = JSON.parse(raw);
+    const validated = validateSave(data);
+    if (validated && data.version === 2) {
+      try {
+        if (!localStorage.getItem(SAVE_KEY + "-legacy-backup"))
+          localStorage.setItem(SAVE_KEY + "-legacy-backup", raw);
+        localStorage.setItem(SAVE_KEY, JSON.stringify(validated));
+      } catch {
+        /* Loading remains available when storage is full. */
+      }
+    }
+    return validated;
   } catch (error) {
     console.warn("Unable to load Mars colony:", error);
     return null;
@@ -555,7 +144,7 @@ function saveGame(game) {
       JSON.stringify({
         ...game,
         version: SAVE_VERSION,
-      })
+      }),
     );
 
     return true;
@@ -565,334 +154,8 @@ function saveGame(game) {
   }
 }
 
-function deleteSavedGame() {
-  try {
-    localStorage.removeItem(SAVE_KEY);
-    return true;
-  } catch (error) {
-    console.error("Unable to delete Mars colony:", error);
-    return false;
-  }
-}
-
- // =====================================================
- // PHASE 6 — RESOURCE ECONOMY
- // =====================================================
-
-
-
-function output(building, technologies) {
-  if (building.type === "habitat") {
-    return HOUSING[building.level];
-  }
-
-  let amount =
-    building.type === "greenhouse"
-      ? FOOD[building.level]
-      : Math.floor(
-          CATALOG[building.type].base *
-            (1 + (building.level - 1) * 0.35)
-        );
-
-  const researchBonuses = {
-    solar: "solarEfficiency",
-    extractor: "waterRecycling",
-    greenhouse: "agriculture",
-    mine: "mining",
-    research: "research",
-  };
-
-  const technologyId = researchBonuses[building.type];
-
-  if (technologyId && technologies[technologyId]) {
-    amount = Math.floor(amount * 1.25);
-  }
-
-  return amount;
-}
-
-
-// =====================================================
-// ENERGY CONSUMPTION
-// =====================================================
-
-function energyCost(building) {
-  const level = building.level;
-
-  switch (building.type) {
-    case "habitat":
-      return Math.ceil(6 + (level - 1) * 3.5);
-
-    case "solar":
-      return 0;
-
-    case "extractor":
-      return Math.ceil(8 + (level - 1) * 1.5);
-
-    case "greenhouse":
-      return level <= 3 ? 10 : level <= 5 ? 16 : 24;
-
-    case "mine":
-      return Math.ceil(12 + (level - 1) * 2.5);
-
-    case "research":
-      return Math.ceil(14 + (level - 1) * 2.5);
-
-    default:
-      return 0;
-  }
-}
-
-// =====================================================
-// BUILDING UPGRADE COSTS
-// =====================================================
-
-function upgradeCost(building) {
-  const next = building.level + 1;
-  const config = CATALOG[building.type];
-
-  const milestones = {
-    habitat: [4, 7, 10, 13, 15],
-    solar: [4, 7, 9],
-    extractor: [4, 7, 11, 15],
-    greenhouse: [4, 6],
-    mine: [4, 7, 11, 15],
-    research: [4, 8, 12, 15],
-  };
-
-  const milestone =
-    milestones[building.type].includes(next);
-
-  let research = 0;
-
-  if (next >= 13) {
-    research = 90 + (next - 13) * 35;
-  } else if (next >= 10) {
-    research = 45 + (next - 10) * 15;
-  } else if (next >= 7) {
-    research = 20 + (next - 7) * 8;
-  } else if (next >= 4) {
-    research = 10;
-  }
-
-  return {
-    metal: Math.ceil(
-      config.cost.metal * (0.55 + next * 0.32) +
-        (milestone ? next * 13 : 0)
-    ),
-    research,
-  };
-}
-
-// =====================================================
-// RESOURCE TRANSACTIONS
-// =====================================================
-
-function canAfford(resources, price, sandbox) {
-  return (
-    sandbox ||
-    Object.entries(price).every(
-      ([key, amount]) => resources[key] >= amount
-    )
-  );
-}
-
-function deduct(resources, price, sandbox) {
-  if (sandbox) {
-    return resources;
-  }
-
-  const next = { ...resources };
-
-  for (const [key, amount] of Object.entries(price)) {
-    next[key] -= amount;
-  }
-
-  return next;
-}
-
-// =====================================================
-// COLONY SIMULATION — ONE MARTIAN SOL
-// =====================================================
-
-function simulateSol(game) {
-  const resources = { ...game.resources };
-  const buildings = game.buildings;
-  const technologies = game.technologies;
-
-  const ofType = (type) =>
-    buildings.filter((building) => building.type === type);
-
-  // Solar power generation
-  for (const building of ofType("solar")) {
-    resources.energy = Math.min(
-      LIMITS.energy,
-      resources.energy + output(building, technologies)
-    );
-  }
-
-  // Powered housing
-  let poweredHousing = 0;
-
-  for (const building of ofType("habitat")) {
-    const required = energyCost(building);
-
-    if (resources.energy >= required) {
-      resources.energy -= required;
-      poweredHousing += output(building, technologies);
-    }
-  }
-
-  // Water production
-  for (const building of ofType("extractor")) {
-    const required = energyCost(building);
-
-    if (resources.energy >= required) {
-      resources.energy -= required;
-
-      resources.water = Math.min(
-        LIMITS.water,
-        resources.water + output(building, technologies)
-      );
-    }
-  }
-
-  // Greenhouse production
-  for (const building of ofType("greenhouse")) {
-    const requiredEnergy = energyCost(building);
-
-    const requiredWater =
-      building.level <= 3
-        ? 8
-        : building.level <= 5
-        ? 14
-        : 22;
-
-    if (
-      resources.energy >= requiredEnergy &&
-      resources.water >= requiredWater
-    ) {
-      resources.energy -= requiredEnergy;
-      resources.water -= requiredWater;
-
-      resources.food = Math.min(
-        LIMITS.food,
-        resources.food + output(building, technologies)
-      );
-    }
-  }
-
-  // Mining and research
-  for (const type of ["mine", "research"]) {
-    for (const building of ofType(type)) {
-      const required = energyCost(building);
-      const resource =
-        type === "mine" ? "metal" : "research";
-
-      if (resources.energy >= required) {
-        resources.energy -= required;
-
-        resources[resource] = Math.min(
-          LIMITS[resource],
-          resources[resource] +
-            output(building, technologies)
-        );
-      }
-    }
-  }
-
-  // ===================================================
-  // CITIZEN CONSUMPTION
-  // ===================================================
-
-  const population = game.colony.population;
-
-  const consumedFood = Math.min(
-    resources.food,
-    population
-  );
-
-  const consumedWater = Math.min(
-    resources.water,
-    population
-  );
-
-  resources.food -= consumedFood;
-  resources.water -= consumedWater;
-
-  const housing = ofType("habitat").reduce(
-    (sum, building) =>
-      sum + HOUSING[building.level],
-    0
-  );
-
-  const supported =
-    population > 0 &&
-    consumedFood === population &&
-    consumedWater === population &&
-    poweredHousing >= population;
-
-  let health = game.colony.health;
-  let stableSols = game.colony.stableSols;
-  let nextPopulation = population;
-
-  // ===================================================
-  // POPULATION GROWTH AND HEALTH
-  // ===================================================
-
-  if (population === 0) {
-    health = 0;
-    stableSols = 0;
-  } else if (supported) {
-    health = Math.min(100, health + 3);
-    stableSols++;
-
-    if (
-      stableSols >= 5 &&
-      health >= 80 &&
-      population < housing
-    ) {
-      nextPopulation++;
-      stableSols = 0;
-    }
-  } else {
-    health = Math.max(0, health - 15);
-    stableSols = 0;
-
-    if (health === 0) {
-      nextPopulation = Math.max(
-        0,
-        nextPopulation - 1
-      );
-
-      health = nextPopulation > 0 ? 20 : 0;
-    }
-  }
-
-  // ===================================================
-  // RETURN UPDATED COLONY
-  // ===================================================
-
-  return {
-    ...game,
-    sol: game.sol + 1,
-    resources,
-
-    colony: {
-      population: nextPopulation,
-      health,
-      stableSols,
-    },
-  };
-}
-
- // =====================================================
- // PHASE 6 — PROCEDURAL MARS ENVIRONMENT
- // =====================================================
-
 function hash(x, z) {
-  const n =
-    Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
+  const n = Math.sin(x * 127.1 + z * 311.7) * 43758.5453;
 
   return n - Math.floor(n);
 }
@@ -912,17 +175,9 @@ function noise(x, z) {
   const v = fz * fz * (3 - 2 * fz);
 
   return THREE.MathUtils.lerp(
-    THREE.MathUtils.lerp(
-      hash(ix, iz),
-      hash(ix + 1, iz),
-      u
-    ),
-    THREE.MathUtils.lerp(
-      hash(ix, iz + 1),
-      hash(ix + 1, iz + 1),
-      u
-    ),
-    v
+    THREE.MathUtils.lerp(hash(ix, iz), hash(ix + 1, iz), u),
+    THREE.MathUtils.lerp(hash(ix, iz + 1), hash(ix + 1, iz + 1), u),
+    v,
   );
 }
 
@@ -934,11 +189,7 @@ function terrainHeight(x, z) {
   const distance = Math.hypot(x, z);
 
   // Preserve a relatively flat starting settlement.
-  const wilderness = THREE.MathUtils.smoothstep(
-    distance,
-    20,
-    65
-  );
+  const wilderness = THREE.MathUtils.smoothstep(distance, 20, 65);
 
   let elevation = 0;
   let amplitude = 10;
@@ -946,9 +197,7 @@ function terrainHeight(x, z) {
 
   // Multiple noise layers create natural terrain.
   for (let i = 0; i < 5; i++) {
-    elevation +=
-      (noise(x * frequency, z * frequency) * 2 - 1) *
-      amplitude;
+    elevation += (noise(x * frequency, z * frequency) * 2 - 1) * amplitude;
 
     amplitude *= 0.5;
     frequency *= 2;
@@ -956,19 +205,9 @@ function terrainHeight(x, z) {
 
   // Elevated ridges and mountainous formations.
   const ridges =
-    Math.pow(
-      1 -
-        Math.abs(
-          noise(
-            x * 0.018 + 12,
-            z * 0.018 - 5
-          ) * 2 - 1
-        ),
-      3
-    ) * 8;
+    Math.pow(1 - Math.abs(noise(x * 0.018 + 12, z * 0.018 - 5) * 2 - 1), 3) * 8;
 
-  let height =
-    (elevation + ridges - 3) * wilderness;
+  let height = (elevation + ridges - 3) * wilderness;
 
   // Martian impact craters.
   const craters = [
@@ -978,27 +217,14 @@ function terrainHeight(x, z) {
     [85, -75, 28, 7],
   ];
 
-  for (const [
-    cx,
-    cz,
-    radius,
-    depth,
-  ] of craters) {
-    const t =
-      Math.hypot(x - cx, z - cz) / radius;
+  for (const [cx, cz, radius, depth] of craters) {
+    const t = Math.hypot(x - cx, z - cz) / radius;
 
     // Depression in the crater center.
-    height -=
-      depth *
-      Math.exp(-Math.pow(t / 0.72, 4));
+    height -= depth * Math.exp(-Math.pow(t / 0.72, 4));
 
     // Raised crater rim.
-    height +=
-      depth *
-      0.4 *
-      Math.exp(
-        -Math.pow((t - 1) / 0.14, 2)
-      );
+    height += depth * 0.4 * Math.exp(-Math.pow((t - 1) / 0.14, 2));
   }
 
   return height;
@@ -1008,14 +234,9 @@ function terrainHeight(x, z) {
 // TERRAIN MESH
 // =====================================================
 
-function Terrain({ onHover, onPlace }) {
+function Terrain({ onHover, onPlace, buildings }) {
   const geometry = useMemo(() => {
-    const geo = new THREE.PlaneGeometry(
-      320,
-      320,
-      180,
-      180
-    );
+    const geo = new THREE.PlaneGeometry(320, 320, 180, 180);
 
     geo.rotateX(-Math.PI / 2);
 
@@ -1036,39 +257,15 @@ function Terrain({ onHover, onPlace }) {
       const color = middle.clone();
 
       if (y < 0) {
-        color.lerp(
-          dark,
-          THREE.MathUtils.clamp(
-            -y / 12,
-            0,
-            1
-          )
-        );
+        color.lerp(dark, THREE.MathUtils.clamp(-y / 12, 0, 1));
       } else {
-        color.lerp(
-          light,
-          THREE.MathUtils.clamp(
-            y / 18,
-            0,
-            1
-          )
-        );
+        color.lerp(light, THREE.MathUtils.clamp(y / 18, 0, 1));
       }
 
-      colors.push(
-        color.r,
-        color.g,
-        color.b
-      );
+      colors.push(color.r, color.g, color.b);
     }
 
-    geo.setAttribute(
-      "color",
-      new THREE.Float32BufferAttribute(
-        colors,
-        3
-      )
-    );
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
 
     geo.computeVertexNormals();
 
@@ -1088,11 +285,9 @@ function Terrain({ onHover, onPlace }) {
     const items = [];
 
     for (let i = 0; i < 220; i++) {
-      const x =
-        (hash(i, 17) - 0.5) * 290;
+      const x = (hash(i, 17) - 0.5) * 290;
 
-      const z =
-        (hash(i, 39) - 0.5) * 290;
+      const z = (hash(i, 39) - 0.5) * 290;
 
       // Keep the starting area clear.
       if (Math.hypot(x, z) < 24) {
@@ -1103,8 +298,7 @@ function Terrain({ onHover, onPlace }) {
         id: i,
         x,
         z,
-        size:
-          0.3 + hash(i, 71) * 1.3,
+        size: 0.3 + hash(i, 71) * 1.3,
       });
     }
 
@@ -1123,74 +317,57 @@ function Terrain({ onHover, onPlace }) {
         onPointerMove={(event) => {
           event.stopPropagation();
 
-          onHover(
-            event.point.x,
-            event.point.z
-          );
+          onHover(event.point.x, event.point.z);
         }}
         onClick={(event) => {
           event.stopPropagation();
           // Ignore clicks caused by camera dragging.
           if (event.delta > 5) {
-           return;
+            return;
           }
 
-          onPlace(
-            event.point.x,
-            event.point.z
-          );
+          onPlace(event.point.x, event.point.z);
         }}
       >
-        <meshStandardMaterial
-          vertexColors
-          roughness={1}
-        />
+        <meshStandardMaterial vertexColors roughness={1} />
       </mesh>
 
-      {rocks.map((rock) => (
-        <mesh
-          key={rock.id}
-          position={[
-            rock.x,
-            terrainHeight(
+      {rocks
+        .filter(
+          (rock) =>
+            !buildings.some(
+              (b) =>
+                Math.abs(b.x - rock.x) < 4 + rock.size &&
+                Math.abs(b.z - rock.z) < 4 + rock.size,
+            ),
+        )
+        .map((rock) => (
+          <mesh
+            key={rock.id}
+            position={[
               rock.x,
-              rock.z
-            ) + rock.size * 0.25,
-            rock.z,
-          ]}
-          scale={[
-            rock.size,
-            rock.size * 0.65,
-            rock.size * 0.8,
-          ]}
-          rotation={[
-            0.2,
-            rock.id,
-            0.1,
-          ]}
-          castShadow
-        >
-          <dodecahedronGeometry
-            args={[1, 0]}
-          />
+              terrainHeight(rock.x, rock.z) + rock.size * 0.25,
+              rock.z,
+            ]}
+            scale={[rock.size, rock.size * 0.65, rock.size * 0.8]}
+            rotation={[0.2, rock.id, 0.1]}
+            castShadow
+          >
+            <dodecahedronGeometry args={[1, 0]} />
 
-          <meshStandardMaterial
-            color={
-              rock.id % 3 === 0
-                ? "#684638"
-                : "#89604a"
-            }
-            roughness={1}
-          />
-        </mesh>
-      ))}
+            <meshStandardMaterial
+              color={rock.id % 3 === 0 ? "#684638" : "#89604a"}
+              roughness={1}
+            />
+          </mesh>
+        ))}
     </group>
   );
 }
 
- // =====================================================
- // PHASE 6 — BUILDING ARCHITECTURE
- // =====================================================
+// =====================================================
+// PHASE 6 — BUILDING ARCHITECTURE
+// =====================================================
 
 const MODELS = {
   habitat: DetailedHabitatModel,
@@ -1205,117 +382,103 @@ const MODELS = {
 // COMPACT BUILDING FITTING SYSTEM
 // =====================================================
 
-function CompactBuildingModel({ Model, level }) {
-  const modelRoot = useRef(null);
-  const fitRoot = useRef(null);
-
-  useLayoutEffect(() => {
-    const root = modelRoot.current;
-    const fit = fitRoot.current;
-    if (!root || !fit) return;
-
-    // Measure at unit scale before applying any fitting transforms.
-    fit.scale.set(1, 1, 1);
-    root.position.set(0, 0, 0);
-    fit.updateWorldMatrix(true, true);
-
-    const bounds = new THREE.Box3().setFromObject(root);
-    if (bounds.isEmpty()) return;
-
-    // Box3 is WORLD-space. Convert its center and base to the
-    // fitting group's LOCAL space before moving the model.
-    const worldCenter = bounds.getCenter(new THREE.Vector3());
-    const localCenter = fit.worldToLocal(worldCenter.clone());
-    const localBottom = fit.worldToLocal(
-      new THREE.Vector3(worldCenter.x, bounds.min.y, worldCenter.z)
-    );
-    const size = bounds.getSize(new THREE.Vector3());
-    const maxHorizontal = Math.max(size.x, size.z, 0.001);
-    const factor = Math.min(
-      0.525,
-      (BUILDING_PLOT - 0.6) / maxHorizontal
-    ) * 1.62;
-
-    root.position.set(-localCenter.x, -localBottom.y, -localCenter.z);
-    fit.scale.setScalar(factor);
-  }, [Model, level]);
-
-  return (
-    <group ref={fitRoot}>
-      <group ref={modelRoot}>
-        <Model level={level} />
-      </group>
-    </group>
-  );
-}
-
 // =====================================================
 // BUILDING RENDERER
 // =====================================================
 
-function Building({
-  building,
-  selected,
-  onSelect,
-}) {
+function Building({ building, selected, onSelect, status, supports, onHover }) {
   const Model = MODELS[building.type];
 
-  if (!Model) {
-    return null;
-  }
-
-  const groundHeight = terrainHeight(
-    building.x,
-    building.z
+  const pad = useMemo(
+    () => constructionPad(building, terrainHeight),
+    [building],
   );
+  if (!Model) return null;
+
+  const groundHeight = pad.top;
 
   return (
     <group
-      position={[
-        building.x,
-        groundHeight,
-        building.z,
-      ]}
+      position={[building.x, groundHeight, building.z]}
 
+      onPointerMove={(event) => {
+        if (onHover?.(building.x, building.z)) event.stopPropagation();
+      }}
       onClick={(event) => {
         event.stopPropagation();
 
         if (event.delta > 5) {
-         return;
+          return;
         }
 
         onSelect(building.id);
       }}
-
     >
+      <mesh position={[0, -0.17, 0]} receiveShadow castShadow>
+        <boxGeometry args={[6.9, 0.34, 6.9]} />
+        <meshStandardMaterial color="#555e60" roughness={0.85} />
+      </mesh>
+      {supports &&
+        [-3.1, 0, 3.1].flatMap((x) =>
+          [-3.1, 3.1].map((z) => {
+            const foot =
+              terrainHeight(building.x + x, building.z + z) - groundHeight;
+            const height = -0.25 - foot;
+            if (height < 0.12) return null;
+            return (
+              <mesh
+                key={`${x}-${z}`}
+                position={[x, foot + height / 2, z]}
+                castShadow
+              >
+                <boxGeometry args={[0.3, height, 0.3]} />
+                <meshStandardMaterial
+                  color="#55646b"
+                  metalness={0.6}
+                  roughness={0.5}
+                />
+              </mesh>
+            );
+          }),
+        )}
       {/* Selected building indicator */}
       {selected && (
-        <mesh
-          rotation={[-Math.PI / 2, 0, 0]}
-          position={[0, 0.12, 0]}
-        >
-          <ringGeometry args={[4, 4.2, 48]} />
-          <meshBasicMaterial
-            color="#ffcc88"
-            side={THREE.DoubleSide}
-          />
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.12, 0]}>
+          <ringGeometry args={[3.58, 3.7, 64]} />
+          <meshBasicMaterial color="#ffcc88" side={THREE.DoubleSide} />
         </mesh>
       )}
 
+      {status && (
+        <mesh position={[2.8, 0.65, 2.8]} raycast={() => {}}>
+          <sphereGeometry args={[0.13, 10, 8]} />
+          <meshStandardMaterial
+            color={status.operating ? "#73e2a6" : "#e89b5f"}
+            emissive={status.operating ? "#73e2a6" : "#e89b5f"}
+            emissiveIntensity={0.65}
+          />
+        </mesh>
+      )}
+      {selected && (
+        <Html position={[0, 5.8, 0]} center style={{ pointerEvents: "none" }}>
+          <div className="mars-building-label">
+            {CATALOG[building.type].name} #{building.id} · L{building.level}
+            <small>{status?.reason ?? "Selected"}</small>
+          </div>
+        </Html>
+      )}
       {/* Detailed compact architecture */}
       <CompactBuildingModel
         Model={Model}
+        plotSize={BUILDING_PLOT}
+        animated={status?.operating ?? false}
         level={building.level}
       />
 
       {/* Invisible interaction volume */}
       <mesh position={[0, 2, 0]}>
         <boxGeometry args={[7, 5, 7]} />
-        <meshBasicMaterial
-          transparent
-          opacity={0}
-          depthWrite={false}
-        />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
     </group>
   );
@@ -1346,8 +509,8 @@ function GhostBuilding({ type, validPlacement }) {
         copy.side = THREE.DoubleSide;
         if (copy.color) {
           copy.color.lerp(
-            new THREE.Color(validPlacement ? '#78ffca' : '#ff7777'),
-            0.45
+            new THREE.Color(validPlacement ? "#78ffca" : "#ff7777"),
+            0.45,
           );
         }
         clones.push(copy);
@@ -1363,7 +526,12 @@ function GhostBuilding({ type, validPlacement }) {
   if (!Model) return null;
   return (
     <group ref={group}>
-      <CompactBuildingModel Model={Model} level={1} />
+      <CompactBuildingModel
+        Model={Model}
+        level={1}
+        plotSize={BUILDING_PLOT}
+        animated={false}
+      />
     </group>
   );
 }
@@ -1375,42 +543,50 @@ function PlacementPreview({ cursor, validPlacement, type }) {
       <mesh raycast={() => {}} rotation={[-Math.PI / 2, 0, 0]}>
         <planeGeometry args={[BUILDING_PLOT, BUILDING_PLOT]} />
         <meshBasicMaterial
-          color={validPlacement ? '#7cf0b7' : '#ff7777'}
-          transparent opacity={0.2} depthWrite={false}
+          color={validPlacement ? "#7cf0b7" : "#ff7777"}
+          transparent
+          opacity={0.2}
+          depthWrite={false}
           side={THREE.DoubleSide}
         />
       </mesh>
-      <mesh raycast={() => {}} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}>
+      <mesh
+        raycast={() => {}}
+        rotation={[-Math.PI / 2, 0, 0]}
+        position={[0, 0.03, 0]}
+      >
         <planeGeometry args={[BUILDING_PLOT, BUILDING_PLOT]} />
-        <meshBasicMaterial color={validPlacement ? '#86ffcb' : '#ff6666'}
-          wireframe transparent opacity={0.8} depthWrite={false}
-          side={THREE.DoubleSide} />
+        <meshBasicMaterial
+          color={validPlacement ? "#86ffcb" : "#ff6666"}
+          wireframe
+          transparent
+          opacity={0.8}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+        />
       </mesh>
-      <GhostBuilding key={`${type}-${validPlacement}`} type={type}
-        validPlacement={validPlacement} />
+      <GhostBuilding
+        key={`${type}-${validPlacement}`}
+        type={type}
+        validPlacement={validPlacement}
+      />
     </group>
   );
 }
 
 // =====================================================
- // PHASE 6 — FREE STRATEGY CAMERA
- // =====================================================
+// PHASE 6 — FREE STRATEGY CAMERA
+// =====================================================
 
-function FreeCameraControls() {
+function FreeCameraControls({ enabled = true }) {
   const controls = useRef(null);
-  const { camera, gl } = useThree();
+  const { camera } = useThree();
 
   const pressedKeys = useRef(new Set());
 
-  const initialPosition = useMemo(
-    () => new THREE.Vector3(35, 45, 55),
-    []
-  );
+  const initialPosition = useMemo(() => new THREE.Vector3(35, 45, 55), []);
 
-  const initialTarget = useMemo(
-    () => new THREE.Vector3(0, 0, 0),
-    []
-  );
+  const initialTarget = useMemo(() => new THREE.Vector3(0, 0, 0), []);
 
   useEffect(() => {
     const onKeyDown = (event) => {
@@ -1433,9 +609,7 @@ function FreeCameraControls() {
     };
 
     const onKeyUp = (event) => {
-      pressedKeys.current.delete(
-        event.key.toLowerCase()
-      );
+      pressedKeys.current.delete(event.key.toLowerCase());
     };
 
     const onBlur = () => {
@@ -1447,24 +621,16 @@ function FreeCameraControls() {
     window.addEventListener("blur", onBlur);
 
     return () => {
-      window.removeEventListener(
-        "keydown",
-        onKeyDown
-      );
+      window.removeEventListener("keydown", onKeyDown);
 
-      window.removeEventListener(
-        "keyup",
-        onKeyUp
-      );
+      window.removeEventListener("keyup", onKeyUp);
 
-      window.removeEventListener(
-        "blur",
-        onBlur
-      );
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
   useFrame((_, delta) => {
+    if (!enabled) return;
     const control = controls.current;
 
     if (!control) {
@@ -1492,10 +658,7 @@ function FreeCameraControls() {
     forward.normalize();
 
     const right = new THREE.Vector3()
-      .crossVectors(
-        forward,
-        new THREE.Vector3(0, 1, 0)
-      )
+      .crossVectors(forward, new THREE.Vector3(0, 1, 0))
       .normalize();
 
     const movement = new THREE.Vector3();
@@ -1528,17 +691,11 @@ function FreeCameraControls() {
     const rotationSpeed = 1.2 * delta;
 
     if (keys.has("q")) {
-      control.setAzimuthalAngle(
-        control.getAzimuthalAngle() -
-          rotationSpeed
-      );
+      control.setAzimuthalAngle(control.getAzimuthalAngle() - rotationSpeed);
     }
 
     if (keys.has("e")) {
-      control.setAzimuthalAngle(
-        control.getAzimuthalAngle() +
-          rotationSpeed
-      );
+      control.setAzimuthalAngle(control.getAzimuthalAngle() + rotationSpeed);
     }
 
     control.update();
@@ -1549,6 +706,7 @@ function FreeCameraControls() {
       ref={controls}
       makeDefault
       enableDamping
+      enabled={enabled}
       dampingFactor={0.08}
       enablePan
       enableRotate
@@ -1595,25 +753,11 @@ function TerritoryBoundary({ population }) {
       for (let i = 0; i <= divisions; i++) {
         const t = i / divisions;
 
-        const x = THREE.MathUtils.lerp(
-          ax,
-          bx,
-          t
-        );
+        const x = THREE.MathUtils.lerp(ax, bx, t);
 
-        const z = THREE.MathUtils.lerp(
-          az,
-          bz,
-          t
-        );
+        const z = THREE.MathUtils.lerp(az, bz, t);
 
-        result.push(
-          new THREE.Vector3(
-            x,
-            terrainHeight(x, z) + 0.3,
-            z
-          )
-        );
+        result.push(new THREE.Vector3(x, terrainHeight(x, z) + 0.3, z));
       }
     }
 
@@ -1621,11 +765,8 @@ function TerritoryBoundary({ population }) {
   }, [half]);
 
   const geometry = useMemo(
-    () =>
-      new THREE.BufferGeometry().setFromPoints(
-        points
-      ),
-    [points]
+    () => new THREE.BufferGeometry().setFromPoints(points),
+    [points],
   );
 
   useEffect(() => {
@@ -1635,11 +776,7 @@ function TerritoryBoundary({ population }) {
   return (
     <group>
       <lineLoop geometry={geometry}>
-        <lineBasicMaterial
-          color="#f5b66c"
-          transparent
-          opacity={0.85}
-        />
+        <lineBasicMaterial color="#f5b66c" transparent opacity={0.85} />
       </lineLoop>
 
       {/* Territory corner markers */}
@@ -1649,17 +786,8 @@ function TerritoryBoundary({ population }) {
         [half, half],
         [-half, half],
       ].map(([x, z], index) => (
-        <mesh
-          key={index}
-          position={[
-            x,
-            terrainHeight(x, z) + 0.8,
-            z,
-          ]}
-        >
-          <cylinderGeometry
-            args={[0.35, 0.5, 1.6, 8]}
-          />
+        <mesh key={index} position={[x, terrainHeight(x, z) + 0.8, z]}>
+          <cylinderGeometry args={[0.35, 0.5, 1.6, 8]} />
 
           <meshStandardMaterial
             color="#f5b66c"
@@ -1672,12 +800,79 @@ function TerritoryBoundary({ population }) {
   );
 }
 
- // =====================================================
- // PHASE 6 — MAIN 3D WORLD
- // =====================================================
+// =====================================================
+// PHASE 6 — MAIN 3D WORLD
+// =====================================================
 
 function snapToGrid(value) {
   return Math.round(value / GRID) * GRID;
+}
+
+function BuildingDrag({ building, onPreview, onDrop }) {
+  const { camera, gl } = useThree();
+  const top = constructionPad(building, terrainHeight).top;
+  useEffect(() => {
+    const canvas = gl.domElement;
+    let dragging = false;
+    let offset = [0, 0];
+    const ray = new THREE.Raycaster(),
+      point = new THREE.Vector3();
+    const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -top);
+    const pick = (e) => {
+      const r = canvas.getBoundingClientRect();
+      ray.setFromCamera(
+        new THREE.Vector2(
+          ((e.clientX - r.left) / r.width) * 2 - 1,
+          (-(e.clientY - r.top) / r.height) * 2 + 1,
+        ),
+        camera,
+      );
+      if (!ray.ray.intersectPlane(plane, point)) return null;
+      return [point.x, point.z];
+    };
+    const down = (e) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      canvas.setPointerCapture(e.pointerId);
+      const p = pick(e);
+      if (p) {
+        offset = [building.x - p[0], building.z - p[1]];
+        onPreview(building.x, building.z);
+      }
+    };
+    const move = (e) => {
+      if (!dragging) return;
+      const p = pick(e);
+      if (p) onPreview(p[0] + offset[0], p[1] + offset[1]);
+    };
+    const up = (e) => {
+      if (!dragging) return;
+      dragging = false;
+      const p = pick(e);
+      if (canvas.hasPointerCapture(e.pointerId))
+        canvas.releasePointerCapture(e.pointerId);
+      if (p)
+        onDrop(
+          building.id,
+          snapToGrid(p[0] + offset[0]),
+          snapToGrid(p[1] + offset[1]),
+        );
+    };
+    const cancel = () => {
+      dragging = false;
+    };
+    canvas.addEventListener("pointerdown", down);
+    canvas.addEventListener("pointermove", move);
+    canvas.addEventListener("pointerup", up);
+    canvas.addEventListener("pointercancel", cancel);
+    return () => {
+      canvas.removeEventListener("pointerdown", down);
+      canvas.removeEventListener("pointermove", move);
+      canvas.removeEventListener("pointerup", up);
+      canvas.removeEventListener("pointercancel", cancel);
+    };
+  }, [camera, gl, building.id, building.x, building.z, top, onDrop, onPreview]);
+  return null;
 }
 
 function MarsScene({
@@ -1687,9 +882,33 @@ function MarsScene({
   onSelectBuilding,
   onPlaceBuilding,
   onHoverChange,
+  networkMode,
+  networkSource,
+  report,
+  movingId,
+  onMove,
 }) {
-  const [hoveredPosition, setHoveredPosition] =
-    useState(null);
+  const [supports, setSupports] = useState(true);
+  useEffect(() => {
+    const listener = (e) => setSupports(e.detail);
+    window.addEventListener("mars-support-visibility", listener);
+    return () =>
+      window.removeEventListener("mars-support-visibility", listener);
+  }, []);
+  const moving = game.buildings.find((b) => b.id === movingId);
+  const [movePreview, setMovePreview] = useState(null);
+  const previewMove = useCallback(
+    (x, z) =>
+      setMovePreview({
+        id: movingId,
+        position: [snapToGrid(x), 0, snapToGrid(z)],
+      }),
+    [movingId],
+  );
+  const storm = report?.weather?.kind === "storm";
+  const dust = report?.weather?.kind === "dust";
+  const sky = storm ? "#4f382b" : dust ? "#302018" : "#120e0d";
+  const [hoveredPosition, setHoveredPosition] = useState(null);
 
   const dragStart = useRef(null);
   const wasDragging = useRef(false);
@@ -1713,11 +932,9 @@ function MarsScene({
     const onPointerMove = (event) => {
       if (!dragStart.current) return;
 
-      const dx =
-        event.clientX - dragStart.current.x;
+      const dx = event.clientX - dragStart.current.x;
 
-      const dy =
-        event.clientY - dragStart.current.y;
+      const dy = event.clientY - dragStart.current.y;
 
       if (Math.hypot(dx, dy) > 5) {
         wasDragging.current = true;
@@ -1728,36 +945,18 @@ function MarsScene({
       dragStart.current = null;
     };
 
-    window.addEventListener(
-      "pointerdown",
-      onPointerDown
-    );
+    window.addEventListener("pointerdown", onPointerDown);
 
-    window.addEventListener(
-      "pointermove",
-      onPointerMove
-    );
+    window.addEventListener("pointermove", onPointerMove);
 
-    window.addEventListener(
-      "pointerup",
-      onPointerUp
-    );
+    window.addEventListener("pointerup", onPointerUp);
 
     return () => {
-      window.removeEventListener(
-        "pointerdown",
-        onPointerDown
-      );
+      window.removeEventListener("pointerdown", onPointerDown);
 
-      window.removeEventListener(
-        "pointermove",
-        onPointerMove
-      );
+      window.removeEventListener("pointermove", onPointerMove);
 
-      window.removeEventListener(
-        "pointerup",
-        onPointerUp
-      );
+      window.removeEventListener("pointerup", onPointerUp);
     };
   }, []);
 
@@ -1766,45 +965,24 @@ function MarsScene({
   // ---------------------------------------------------
 
   const placementValid = useMemo(() => {
-    if (!hoveredPosition || !placementMode) {
-      return false;
-    }
-
-    const [x, , z] = hoveredPosition;
-
-    if (
-      !insideTerritory(
-        x,
-        z,
-        game.colony.population
-      )
-    ) {
-      return false;
-    }
-
-    return !footprintCollision(
-      game.buildings,
-      x,
-      z
-    );
-  }, [
-    hoveredPosition,
-    placementMode,
-    game.buildings,
-    game.colony.population,
-  ]);
+    if (!hoveredPosition || !placementMode) return false;
+    return placementFeedback(
+      game,
+      placementMode,
+      hoveredPosition[0],
+      hoveredPosition[2],
+    ).valid;
+  }, [hoveredPosition, placementMode, game]);
 
   const handleHover = (x, z) => {
-    if (!placementMode) {
-      return;
-    }
+    if (!placementMode && !networkMode) return;
 
     const snappedX = snapToGrid(x);
     const snappedZ = snapToGrid(z);
 
     const position = [
       snappedX,
-      terrainHeight(snappedX, snappedZ),
+      constructionPad({ x: snappedX, z: snappedZ }, terrainHeight).top,
       snappedZ,
     ];
 
@@ -1823,30 +1001,15 @@ function MarsScene({
     const snappedX = snapToGrid(x);
     const snappedZ = snapToGrid(z);
 
-    if (
-      !insideTerritory(
-        snappedX,
-        snappedZ,
-        game.colony.population
-      )
-    ) {
+    if (!insideTerritory(snappedX, snappedZ, game.colony.population)) {
       return;
     }
 
-    if (
-      footprintCollision(
-        game.buildings,
-        snappedX,
-        snappedZ
-      )
-    ) {
+    if (footprintCollision(game.buildings, snappedX, snappedZ)) {
       return;
     }
 
-    onPlaceBuilding(
-      snappedX,
-      snappedZ
-    );
+    onPlaceBuilding(snappedX, snappedZ);
   };
 
   return (
@@ -1865,616 +1028,344 @@ function MarsScene({
       }}
     >
       {/* MARTIAN ATMOSPHERE */}
-      <color
-        attach="background"
-        args={["#120e0d"]}
-      />
+      <color attach="background" args={[sky]} />
 
-      <fog
-        attach="fog"
-        args={["#120e0d", 90, 310]}
-      />
+      <fog attach="fog" args={[sky, storm ? 35 : 90, storm ? 135 : 310]} />
 
-      <ambientLight intensity={0.75} />
+      <ambientLight intensity={storm ? 0.65 : 0.75} />
 
-      <hemisphereLight
-        args={[
-          "#ffe3bd",
-          "#432a22",
-          1.2,
-        ]}
-      />
+      <hemisphereLight args={["#ffe3bd", "#432a22", 1.2]} />
 
       <directionalLight
         position={[70, 110, 35]}
-        intensity={2.2}
+        intensity={storm ? 0.9 : 2.2}
         castShadow
-        shadow-mapSize={[
-          2048,
-          2048,
-        ]}
+        shadow-mapSize={[2048, 2048]}
       />
 
-      <Stars
-        radius={250}
-        depth={80}
-        count={1500}
-        factor={3}
-        fade
-      />
+      <Stars radius={250} depth={80} count={1500} factor={3} fade />
 
       {/* FREE CAMERA */}
-      <FreeCameraControls />
+      <FreeCameraControls enabled={!moving} />
+      {moving && (
+        <BuildingDrag
+          building={moving}
+          onPreview={previewMove}
+          onDrop={onMove}
+        />
+      )}
 
       {/* MARS SURFACE */}
       <Terrain
         onHover={handleHover}
         onPlace={handlePlace}
+        buildings={game.buildings}
       />
 
       {/* EXPANDABLE TERRITORY */}
-      <TerritoryBoundary
-        population={
-          game.colony.population
-        }
+      <TerritoryBoundary population={game.colony.population} />
+
+      <Infrastructure
+        game={game}
+        heightAt={terrainHeight}
+        activeKind={networkMode}
+        report={report}
+        previewFrom={networkSource}
+        previewPoint={hoveredPosition}
       />
-
       {/* EXISTING BUILDINGS */}
-      {game.buildings.map(
-        (building) => (
-          <Building
-            key={building.id}
-            building={building}
-            selected={
-              selectedId === building.id
+      {game.buildings.map((building) => (
+        <Building
+          key={building.id}
+          building={building}
+          supports={supports}
+          onHover={(x, z) => {
+            if (networkMode) {
+              handleHover(x, z);
+              return true;
             }
-            onSelect={
-              onSelectBuilding
-            }
-          />
-        )
-      )}
+            return false;
+          }}
+          status={report?.buildings?.find((b) => b.id === building.id)}
+          selected={selectedId === building.id || networkSource === building.id}
+          onSelect={onSelectBuilding}
+        />
+      ))}
 
+      {moving && movePreview?.id === moving.id && (
+        <PlacementPreview
+          type={moving.type}
+          cursor={[
+            movePreview.position[0],
+            constructionPad(
+              {
+                ...moving,
+                x: movePreview.position[0],
+                z: movePreview.position[2],
+              },
+              terrainHeight,
+            ).top,
+            movePreview.position[2],
+          ]}
+          validPlacement={
+            dispatchColony(game, {
+              type: "move",
+              id: moving.id,
+              x: movePreview.position[0],
+              z: movePreview.position[2],
+            }).game !== game
+          }
+        />
+      )}
       {/* CONSTRUCTION PREVIEW */}
-      {placementMode &&
-        hoveredPosition && (
-          <PlacementPreview
-            type={placementMode}
-            cursor={
-              hoveredPosition
-            }
-            validPlacement={
-              placementValid
-            }
-          />
-        )}
+      {placementMode && hoveredPosition && (
+        <PlacementPreview
+          type={placementMode}
+          cursor={hoveredPosition}
+          validPlacement={placementValid}
+        />
+      )}
     </Canvas>
   );
 }
 
- // =====================================================
- // PHASE 6 — MAIN GAME STATE AND ACTIONS
- // =====================================================
+// =====================================================
+// PHASE 6 — MAIN GAME STATE AND ACTIONS
+// =====================================================
 
 function useMarsGame() {
-  const [game, setGame] = useState(() => {
-    return loadSavedGame();
-  });
-
+  const [game, setGame] = useState(loadSavedGame);
   const [selectedId, setSelectedId] = useState(null);
   const [placementMode, setPlacementMode] = useState(null);
+  const [networkMode, setNetworkMode] = useState(null);
+  const [movingId, setMovingId] = useState(null);
+  const [networkSource, setNetworkSource] = useState(null);
   const [notification, setNotification] = useState("");
-  const [activePanel, setActivePanel] = useState("build");
-
+  const [saveError, setSaveError] = useState("");
+  const [activePanel, setActivePanel] = useState("operations");
   const gameRef = useRef(game);
-
+  const commit = useCallback((next) => {
+    gameRef.current = next;
+    setGame(next);
+    setSaveError(
+      saveGame(next)
+        ? ""
+        : "Autosave failed. Export your colony before closing this page.",
+    );
+  }, []);
+  const dispatch = useCallback(
+    (action, silent = false) => {
+      if (!gameRef.current) return;
+      const result = dispatchColony(gameRef.current, action);
+      if (result.game !== gameRef.current) commit(result.game);
+      if (!silent && result.message) setNotification(result.message);
+      return result;
+    },
+    [commit],
+  );
+  const hasGame = Boolean(game);
   useEffect(() => {
-    gameRef.current = game;
-  }, [game]);
-
-  // ===================================================
-  // NOTIFICATIONS
-  // ===================================================
-
-  const notify = (message) => {
-    setNotification(message);
-  };
-
-  // ===================================================
-  // START A NEW COLONY
-  // ===================================================
-
-  const startGame = (mode) => {
-    if (!["survival", "sandbox"].includes(mode)) {
-      return;
-    }
-
-    const newGame = freshGame(mode);
-
-    setGame(newGame);
-    setSelectedId(null);
+    if (!hasGame) return;
+    const timer = window.setInterval(() => {
+      if (gameRef.current && !gameRef.current.paused)
+        dispatch({ type: "advance" }, true);
+    }, SOL_DURATION);
+    return () => window.clearInterval(timer);
+  }, [hasGame, dispatch]);
+  const cancelModes = useCallback(() => {
+    setMovingId(null);
     setPlacementMode(null);
-    setActivePanel("build");
-
-    notify(
-      mode === "sandbox"
-        ? "Sandbox colony initialized."
-        : "Survival mission initialized."
+    setNetworkMode(null);
+    setNetworkSource(null);
+  }, []);
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key === "Escape") cancelModes();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [cancelModes]);
+  const startGame = (mode) => {
+    if (!["survival", "sandbox"].includes(mode)) return;
+    commit(freshGame(mode));
+    cancelModes();
+    setSelectedId(null);
+    setActivePanel("operations");
+    setNotification(
+      "Colony initialized and paused. Follow Mission in Operations to build your first connected settlement.",
     );
   };
-
-  // ===================================================
-  // AUTOMATIC SAVE
-  // ===================================================
-
-  useEffect(() => {
-    if (!game) {
-      return;
-    }
-
-    saveGame(game);
-  }, [game]);
-
-  // ===================================================
-  // AUTOMATIC COLONY SIMULATION
-  // ===================================================
-
-  useEffect(() => {
-    if (!game) {
-      return;
-    }
-
-    const interval = window.setInterval(() => {
-      setGame((current) => {
-        if (!current || current.paused) {
-          return current;
-        }
-
-        if (
-          current.mode === "sandbox" &&
-          !current.sandboxSurvival
-        ) {
-          return {
-            ...current,
-            sol: current.sol + 1,
-          };
-        }
-
-        return simulateSol(current);
-      });
-    }, SOL_DURATION);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [Boolean(game)]);
-
-  // ===================================================
-  // CONSTRUCTION
-  // ===================================================
-
-  const placeBuilding = (x, z) => {
-    const type = placementMode;
-
-    if (!type || !CATALOG[type]) {
-      return;
-    }
-
-    const current = gameRef.current;
-
-    if (!current) {
-      return;
-    }
-
-    const config = CATALOG[type];
-
-    if (
-      !insideTerritory(
-        x,
-        z,
-        current.colony.population
-      )
-    ) {
-      notify("Outside the unlocked colony territory.");
-      return;
-    }
-
-    if (
-      footprintCollision(current.buildings, x, z)
-    ) {
-      notify("Construction plot is occupied.");
-      return;
-    }
-
-    const sandbox = current.mode === "sandbox";
-
-    if (
-      !canAfford(
-        current.resources,
-        config.cost,
-        sandbox
-      )
-    ) {
-      notify("Insufficient construction resources.");
-      return;
-    }
-
-    const newBuilding = {
-      id: current.nextId,
-      type,
-      level: 1,
-      x,
-      z,
-    };
-
-    setGame((previous) => {
-      if (!previous) return previous;
-
-      // Recheck against the latest state.
-      if (
-        !insideTerritory(
-          x,
-          z,
-          previous.colony.population
-        ) ||
-        footprintCollision(
-          previous.buildings,
-          x,
-          z
-        ) ||
-        !canAfford(
-          previous.resources,
-          config.cost,
-          previous.mode === "sandbox"
-        )
-      ) {
-        return previous;
-      }
-
-      return {
-        ...previous,
-
-        resources: deduct(
-          previous.resources,
-          config.cost,
-          previous.mode === "sandbox"
-        ),
-
-        buildings: [
-          ...previous.buildings,
-          {
-            ...newBuilding,
-            id: previous.nextId,
-          },
-        ],
-
-        nextId: previous.nextId + 1,
-      };
-    });
-
+  const chooseNetwork = (kind) => {
+    setMovingId(null);
+    setNetworkMode(kind);
+    setNetworkSource(null);
     setPlacementMode(null);
-    notify(`${config.name} construction requested.`);
+    setActivePanel("operations");
   };
-
-  // ===================================================
-  // BUILDING SELECTION
-  // ===================================================
-
   const selectBuilding = (id) => {
+    if (movingId) return;
     setSelectedId(id);
     setPlacementMode(null);
+    if (networkMode) {
+      if (networkSource === null) {
+        setNetworkSource(id);
+        setNotification(
+          "Now select the destination building. Escape cancels linking.",
+        );
+      } else {
+        dispatch({
+          type: "connect",
+          kind: networkMode,
+          from: networkSource,
+          to: id,
+        });
+        setNetworkSource(null);
+      }
+      return;
+    }
     setActivePanel("inspect");
   };
-
-  const selectedBuilding = game?.buildings.find(
-    (building) => building.id === selectedId
-  ) ?? null;
-
-  // ===================================================
-  // BUILDING UPGRADES
-  // ===================================================
-
-  const upgradeBuilding = (id) => {
-    const current = gameRef.current;
-
-    if (!current) return;
-
-    const building = current.buildings.find(
-      (item) => item.id === id
-    );
-
-    if (!building) {
-      notify("Building not found.");
-      return;
-    }
-
-    const config = CATALOG[building.type];
-
-    if (building.level >= config.max) {
-      notify("Building is already at maximum level.");
-      return;
-    }
-
-    // Upgrades retain the same reserved footprint.
-    // Recheck it to protect against invalid layouts.
-    if (
-      footprintCollision(
-        current.buildings,
-        building.x,
-        building.z,
-        building.id
-      )
-    ) {
-      notify(
-        "Upgrade blocked: another building occupies the plot."
-      );
-      return;
-    }
-
-    const price = upgradeCost(building);
-    const sandbox = current.mode === "sandbox";
-
-    if (!canAfford(current.resources, price, sandbox)) {
-      notify("Insufficient resources for upgrade.");
-      return;
-    }
-
-    setGame((previous) => {
-      if (!previous) return previous;
-
-      const target = previous.buildings.find(
-        (item) => item.id === id
-      );
-
-      if (
-        !target ||
-        target.level >= CATALOG[target.type].max
-      ) {
-        return previous;
-      }
-
-      const latestPrice = upgradeCost(target);
-
-      if (
-        footprintCollision(
-          previous.buildings,
-          target.x,
-          target.z,
-          target.id
-        ) ||
-        !canAfford(
-          previous.resources,
-          latestPrice,
-          previous.mode === "sandbox"
-        )
-      ) {
-        return previous;
-      }
-
-      return {
-        ...previous,
-
-        resources: deduct(
-          previous.resources,
-          latestPrice,
-          previous.mode === "sandbox"
-        ),
-
-        buildings: previous.buildings.map((item) =>
-          item.id === id
-            ? {
-                ...item,
-                level: item.level + 1,
-              }
-            : item
-        ),
-      };
+  const placeBuilding = (x, z) => {
+    const result = dispatch({
+      type: "place",
+      buildingType: placementMode,
+      x,
+      z,
     });
-
-    notify(`${config.name} upgrade requested.`);
+    if (result?.game !== game && result?.game) setPlacementMode(null);
   };
-
-  // ===================================================
-  // RESEARCH
-  // ===================================================
-
-  const unlockTechnology = (technologyId) => {
-    const technology = TECHNOLOGIES.find(
-      (item) => item.id === technologyId
-    );
-
-    const current = gameRef.current;
-
-    if (!technology || !current) {
-      return;
-    }
-
-    if (current.technologies[technologyId]) {
-      notify("Technology already unlocked.");
-      return;
-    }
-
-    const sandbox = current.mode === "sandbox";
-
-    if (
-      !sandbox &&
-      current.resources.research < technology.cost
-    ) {
-      notify("Insufficient research points.");
-      return;
-    }
-
-    setGame((previous) => {
-      if (
-        !previous ||
-        previous.technologies[technologyId]
-      ) {
-        return previous;
-      }
-
-      if (
-        previous.mode !== "sandbox" &&
-        previous.resources.research < technology.cost
-      ) {
-        return previous;
-      }
-
-      return {
-        ...previous,
-
-        resources: deduct(
-          previous.resources,
-          { research: technology.cost },
-          previous.mode === "sandbox"
-        ),
-
-        technologies: {
-          ...previous.technologies,
-          [technologyId]: true,
-        },
-      };
-    });
-
-    notify(`${technology.name} research requested.`);
-  };
-
-  // ===================================================
-  // SIMULATION CONTROLS
-  // ===================================================
-
-  const togglePause = () => {
-    setGame((previous) =>
-      previous
-        ? {
-            ...previous,
-            paused: !previous.paused,
-          }
-        : previous
-    );
-  };
-
-  const advanceSol = () => {
-    setGame((previous) => {
-      if (!previous) return previous;
-
-      if (
-        previous.mode === "sandbox" &&
-        !previous.sandboxSurvival
-      ) {
-        return {
-          ...previous,
-          sol: previous.sol + 1,
-        };
-      }
-
-      return simulateSol(previous);
-    });
-  };
-
-  const toggleSandboxSurvival = () => {
-    setGame((previous) => {
-      if (!previous || previous.mode !== "sandbox") {
-        return previous;
-      }
-
-      return {
-        ...previous,
-        sandboxSurvival: !previous.sandboxSurvival,
-      };
-    });
-  };
-
-  // ===================================================
-  // RESET COLONY
-  // ===================================================
-
   const resetColony = () => {
-    if (!game) return;
-
-    const confirmed = window.confirm(
-      "Reset this colony? All current progress will be lost."
-    );
-
-    if (!confirmed) return;
-
-    const newGame = freshGame(game.mode);
-
-    setGame(newGame);
-    setSelectedId(null);
-    setPlacementMode(null);
-
-    notify("Colony reset successfully.");
+    if (
+      game &&
+      window.confirm(
+        "Reset this colony? Export a backup first if you want to keep it.",
+      )
+    )
+      startGame(game.mode);
   };
-
-  // ===================================================
-  // DERIVED COLONY STATISTICS
-  // ===================================================
-
-  const satisfaction = useMemo(
-    () =>
-      game
-        ? calculateSatisfaction(game)
-        : null,
-    [game]
+  const moveBuilding = useCallback(
+    (id, x, z) => {
+      const before = gameRef.current;
+      const result = dispatch({ type: "move", id, x, z });
+      if (result?.game !== before) setMovingId(null);
+    },
+    [dispatch],
   );
-
-  const territory = useMemo(
-    () =>
-      game
-        ? territoryFor(game.colony.population)
-        : null,
-    [game]
-  );
-
-  const housingCapacity = useMemo(() => {
-    if (!game) return 0;
-
-    return game.buildings
-      .filter((building) => building.type === "habitat")
-      .reduce(
-        (total, building) =>
-          total + HOUSING[building.level],
-        0
-      );
-  }, [game]);
-
-  // ===================================================
-  // EXPOSE CONTROLS TO MAIN INTERFACE
-  // ===================================================
-
+  const beginMove = (id) => {
+    cancelModes();
+    setMovingId(id);
+    setNotification(
+      "Drag on the map to relocate the selected building. Green = valid; red = blocked. Escape cancels. Existing utilities must remain valid.",
+    );
+  };
+  const demolishBuilding = (id) => {
+    if (
+      !window.confirm(
+        "Demolish this building? Attached utility links and its stored energy will be removed. Recover 50% of its original metal cost (none in sandbox).",
+      )
+    )
+      return;
+    const before = gameRef.current;
+    const result = dispatch({ type: "demolish", id });
+    if (result?.game !== before) {
+      cancelModes();
+      setSelectedId(null);
+    }
+  };
+  const report = useMemo(() => (game ? getColonyReport(game) : null), [game]);
   return {
     game,
     selectedId,
-    selectedBuilding,
+    selectedBuilding: game?.buildings.find((b) => b.id === selectedId) ?? null,
     placementMode,
+    networkMode,
+    networkSource,
     notification,
+    saveError,
     activePanel,
-
-    satisfaction,
-    territory,
-    housingCapacity,
-
+    report,
+    satisfaction: game ? calculateSatisfaction(game) : null,
+    territory: game ? territoryFor(game.colony.population) : null,
+    housingCapacity: report?.housing ?? 0,
     startGame,
     placeBuilding,
     selectBuilding,
-    upgradeBuilding,
-    unlockTechnology,
-
-    togglePause,
-    advanceSol,
-    toggleSandboxSurvival,
+    movingId,
+    moveBuilding,
+    beginMove,
+    demolishBuilding,
+    restoreGame: (data) => {
+      const restored = validateSave(data);
+      if (!restored) {
+        setNotification("Invalid save file. Current colony kept.");
+        return false;
+      }
+      if (
+        !window.confirm(
+          "Replace the current colony with this save? Export a backup first to keep your current progress.",
+        )
+      )
+        return false;
+      commit(restored);
+      cancelModes();
+      setSelectedId(null);
+      return true;
+    },
+    title: () => {
+      cancelModes();
+      gameRef.current = null;
+      setGame(null);
+    },
+    continueGame: () => {
+      const saved = loadSavedGame();
+      if (saved) commit(saved);
+    },
+    upgradeBuilding: (id) => dispatch({ type: "upgrade", id }),
+    unlockTechnology: (id) => dispatch({ type: "research", id }),
+    togglePause: () => dispatch({ type: "pause" }),
+    advanceSol: () => dispatch({ type: "advance" }),
+    toggleSandboxSurvival: () => dispatch({ type: "sandboxSurvival" }),
     resetColony,
-
+    dispatch,
     setPlacementMode,
     setSelectedId,
     setActivePanel,
     setNotification,
+    chooseNetwork,
+    cancelModes,
   };
 }
 
- // =====================================================
- // PHASE 6 — MAIN GAME INTERFACE
- // =====================================================
+function placementFeedback(game, type, x, z) {
+  const result = dispatchColony(game, {
+    type: "place",
+    buildingType: type,
+    x,
+    z,
+  });
+  return {
+    valid: result.game !== game,
+    reason: result.game !== game ? "Ready to build" : result.message,
+  };
+}
+function PlotReadout({ game, type, position }) {
+  const [x, , z] = position;
+  const site = terrainProfile(x, z);
+  const feedback = placementFeedback(game, type, x, z);
+  return (
+    <div className="mars-plot-readout" role="status">
+      <strong>
+        {CATALOG[type].name} · {x}, {z}
+      </strong>
+      <span style={{ color: feedback.valid ? "#b2dfc0" : "#ffb199" }}>
+        {feedback.reason}
+      </span>
+      <small>
+        Ice yield ×{site.ice.toFixed(2)} · Ore yield ×{site.ore.toFixed(2)}
+      </small>
+    </div>
+  );
+}
 
 const UI = {
   root: {
@@ -2589,11 +1480,7 @@ function ResourceBar({ resources }) {
 // BUILDING CATALOGUE
 // =====================================================
 
-function BuildingCatalogue({
-  game,
-  placementMode,
-  onChoose,
-}) {
+function BuildingCatalogue({ game, placementMode, onChoose }) {
   return (
     <div>
       {Object.entries(CATALOG).map(([type, config]) => {
@@ -2602,24 +1489,18 @@ function BuildingCatalogue({
         const affordable = canAfford(
           game.resources,
           config.cost,
-          game.mode === "sandbox"
+          game.mode === "sandbox",
         );
 
         return (
           <button
             key={type}
             type="button"
-            onClick={() =>
-              onChoose(active ? null : type)
-            }
+            onClick={() => onChoose(active ? null : type)}
             style={{
               ...UI.button,
-              borderColor: active
-                ? "#e8a879"
-                : "#384a5b",
-              background: active
-                ? "#4b352b"
-                : "#263849",
+              borderColor: active ? "#e8a879" : "#384a5b",
+              background: active ? "#4b352b" : "#263849",
               opacity: affordable ? 1 : 0.55,
             }}
           >
@@ -2634,9 +1515,7 @@ function BuildingCatalogue({
                 {config.icon} {config.name}
               </span>
 
-              <span style={UI.small}>
-                LVL {config.max} MAX
-              </span>
+              <span style={UI.small}>LVL {config.max} MAX</span>
             </div>
 
             <div
@@ -2646,9 +1525,7 @@ function BuildingCatalogue({
               }}
             >
               {Object.entries(config.cost)
-                .map(([resource, amount]) =>
-                  `${amount} ${resource}`
-                )
+                .map(([resource, amount]) => `${amount} ${resource}`)
                 .join(" · ")}
             </div>
           </button>
@@ -2662,17 +1539,13 @@ function BuildingCatalogue({
 // SELECTED BUILDING INSPECTOR
 // =====================================================
 
-function BuildingInspector({
-  building,
-  game,
-  onUpgrade,
-}) {
+function BuildingInspector({ building, game, onUpgrade, onMove, onDemolish }) {
   if (!building) {
     return (
       <div style={UI.card}>
         <p style={UI.small}>
-          Select a building on the map to inspect
-          its production and upgrade options.
+          Select a building on the map to inspect its production and upgrade
+          options.
         </p>
       </div>
     );
@@ -2681,28 +1554,16 @@ function BuildingInspector({
   const config = CATALOG[building.type];
   const maximum = building.level >= config.max;
 
-  const cost = maximum
-    ? null
-    : upgradeCost(building);
+  const cost = maximum ? null : upgradeCost(building);
 
   const affordable =
-    maximum ||
-    canAfford(
-      game.resources,
-      cost,
-      game.mode === "sandbox"
-    );
+    maximum || canAfford(game.resources, cost, game.mode === "sandbox");
 
-  const production = output(
-    building,
-    game.technologies
-  );
+  const production = output(building, game.technologies);
 
   return (
     <div style={UI.card}>
-      <div style={UI.heading}>
-        BUILDING INSPECTOR
-      </div>
+      <div style={UI.heading}>BUILDING INSPECTOR</div>
 
       <h3 style={{ margin: "0 0 8px" }}>
         {config.icon} {config.name}
@@ -2712,22 +1573,53 @@ function BuildingInspector({
         Level {building.level} / {config.max}
       </p>
 
-      <p style={UI.small}>
-        Production / Capacity: {production}
-      </p>
+      <p style={UI.small}>Potential output / capacity: {production}</p>
 
-      <p style={UI.small}>
-        Energy demand: {energyCost(building)}
-      </p>
+      <p style={UI.small}>Energy demand: {energyCost(building)}</p>
 
+      <div style={{ ...UI.small, lineHeight: 1.6, marginBottom: 10 }}>
+        <strong>
+          {getColonyReport(game).byBuilding?.[building.id]?.reason ??
+            "Check Operations for utility and staffing status"}
+        </strong>
+        {!maximum && (
+          <div>
+            Next level:{" "}
+            {output(
+              { ...building, level: building.level + 1 },
+              game.technologies,
+            )}{" "}
+            potential output / capacity ·{" "}
+            {energyCost({ ...building, level: building.level + 1 })} energy /
+            sol
+          </div>
+        )}
+      </div>
       <p style={UI.small}>
         Location: {building.x}, {building.z}
       </p>
 
+      <button
+        type="button"
+        style={UI.button}
+        onClick={() => onMove(building.id)}
+      >
+        MOVE BUILDING
+      </button>
+      <button
+        type="button"
+        style={{ ...UI.button, background: "#502d2b" }}
+        onClick={() => onDemolish(building.id)}
+      >
+        DEMOLISH BUILDING
+      </button>
+      <p style={UI.small}>
+        Moving is free and retains upgrades and crew. Demolition removes
+        attached links and recovers 50% of the original metal cost; stored
+        energy is lost. Your last occupied habitat is protected.
+      </p>
       {maximum ? (
-        <strong style={{ color: "#89dfb2" }}>
-          MAXIMUM LEVEL REACHED
-        </strong>
+        <strong style={{ color: "#89dfb2" }}>MAXIMUM LEVEL REACHED</strong>
       ) : (
         <>
           <div
@@ -2739,9 +1631,7 @@ function BuildingInspector({
             Upgrade cost:{" "}
             {Object.entries(cost)
               .filter(([, amount]) => amount > 0)
-              .map(([resource, amount]) =>
-                `${amount} ${resource}`
-              )
+              .map(([resource, amount]) => `${amount} ${resource}`)
               .join(" · ")}
           </div>
 
@@ -2766,52 +1656,33 @@ function BuildingInspector({
 // RESEARCH PANEL
 // =====================================================
 
-function ResearchPanel({
-  game,
-  onResearch,
-}) {
+function ResearchPanel({ game, onResearch }) {
   return (
     <div>
       {TECHNOLOGIES.map((technology) => {
-        const unlocked =
-          game.technologies[technology.id];
+        const unlocked = game.technologies[technology.id];
 
         const affordable =
-          game.mode === "sandbox" ||
-          game.resources.research >= technology.cost;
+          game.mode === "sandbox" || game.resources.research >= technology.cost;
 
         return (
-          <div
-            key={technology.id}
-            style={UI.card}
-          >
+          <div key={technology.id} style={UI.card}>
             <strong>{technology.name}</strong>
 
-            <p style={UI.small}>
-              {technology.description}
-            </p>
+            <p style={UI.small}>{technology.description}</p>
 
-            <p style={UI.small}>
-              Research cost: {technology.cost}
-            </p>
+            <p style={UI.small}>Research cost: {technology.cost}</p>
 
             <button
               type="button"
               style={{
                 ...UI.button,
-                opacity:
-                  unlocked || !affordable
-                    ? 0.55
-                    : 1,
+                opacity: unlocked || !affordable ? 0.55 : 1,
               }}
               disabled={unlocked || !affordable}
-              onClick={() =>
-                onResearch(technology.id)
-              }
+              onClick={() => onResearch(technology.id)}
             >
-              {unlocked
-                ? "RESEARCHED"
-                : "UNLOCK TECHNOLOGY"}
+              {unlocked ? "RESEARCHED" : "UNLOCK TECHNOLOGY"}
             </button>
           </div>
         );
@@ -2824,16 +1695,10 @@ function ResearchPanel({
 // COLONY STATUS
 // =====================================================
 
-function ColonyStatus({
-  game,
-  housingCapacity,
-  territory,
-}) {
+function ColonyStatus({ game, housingCapacity, territory }) {
   return (
     <div style={UI.card}>
-      <div style={UI.heading}>
-        COLONY STATUS
-      </div>
+      <div style={UI.heading}>COLONY STATUS</div>
 
       <div
         style={{
@@ -2870,9 +1735,7 @@ function ColonyStatus({
           paddingTop: 12,
         }}
       >
-        <div style={UI.small}>
-          TERRITORY: {territory.title}
-        </div>
+        <div style={UI.small}>TERRITORY: {territory.title}</div>
 
         <strong>
           {territory.width} × {territory.width}
@@ -2891,7 +1754,7 @@ function ColonyStatus({
   );
 }
 
- // =====================================================
+// =====================================================
 // NET PRODUCTION — PROJECTED RESOURCE CHANGE PER SOL
 // =====================================================
 
@@ -2904,7 +1767,7 @@ function NetProductionPanel({ game }) {
       ["metal", "energy", "water", "food", "research"].map((key) => [
         key,
         projected.resources[key] - game.resources[key],
-      ])
+      ]),
     );
   }, [game, active]);
 
@@ -2919,21 +1782,47 @@ function NetProductionPanel({ game }) {
   return (
     <div style={UI.card}>
       <div style={UI.heading}>NET PRODUCTION / SOL</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+          gap: 8,
+        }}
+      >
         {items.map(([key, symbol, label]) => {
           const value = net?.[key] ?? 0;
-          const color = !active ? "#9baaba" : value > 0 ? "#83dfb0" : value < 0 ? "#ef8585" : "#c5d0da";
+          const color = !active
+            ? "#9baaba"
+            : value > 0
+              ? "#83dfb0"
+              : value < 0
+                ? "#ef8585"
+                : "#c5d0da";
           return (
-            <div key={key} style={{ background: "#111b26", border: "1px solid #2a3846", borderRadius: 9, padding: "10px 12px" }}>
-              <div style={{ ...UI.small, fontSize: 10 }}>{symbol} {label}</div>
+            <div
+              key={key}
+              style={{
+                background: "#111b26",
+                border: "1px solid #2a3846",
+                borderRadius: 9,
+                padding: "10px 12px",
+              }}
+            >
+              <div style={{ ...UI.small, fontSize: 10 }}>
+                {symbol} {label}
+              </div>
               <strong style={{ color, fontSize: 18 }}>
-                {!active ? "OFF" : `${value > 0 ? "+" : ""}${value.toLocaleString()}`}
+                {!active
+                  ? "OFF"
+                  : `${value > 0 ? "+" : ""}${value.toLocaleString()}`}
               </strong>
             </div>
           );
         })}
       </div>
-      <p style={{ ...UI.small, marginBottom: 0, marginTop: 10, lineHeight: 1.5 }}>
+      <p
+        style={{ ...UI.small, marginBottom: 0, marginTop: 10, lineHeight: 1.5 }}
+      >
         {!active
           ? "Sandbox survival is off; resource production and consumption are disabled."
           : "Projected change next sol, after production, building energy use, citizen consumption and storage limits."}
@@ -2943,8 +1832,8 @@ function NetProductionPanel({ game }) {
 }
 
 // =====================================================
- // PHASE 6 — CITIZEN SATISFACTION DASHBOARD
- // =====================================================
+// PHASE 6 — CITIZEN SATISFACTION DASHBOARD
+// =====================================================
 
 function SatisfactionDashboard({ satisfaction }) {
   if (!satisfaction) {
@@ -2959,9 +1848,7 @@ function SatisfactionDashboard({ satisfaction }) {
 
   return (
     <div style={UI.card}>
-      <div style={UI.heading}>
-        CITIZEN SATISFACTION
-      </div>
+      <div style={UI.heading}>CITIZEN SATISFACTION</div>
 
       <div
         style={{
@@ -2972,9 +1859,7 @@ function SatisfactionDashboard({ satisfaction }) {
         }}
       >
         <div>
-          <div style={UI.small}>
-            OVERALL SATISFACTION
-          </div>
+          <div style={UI.small}>OVERALL SATISFACTION</div>
 
           <strong
             style={{
@@ -2999,10 +1884,7 @@ function SatisfactionDashboard({ satisfaction }) {
       </div>
 
       {satisfaction.indicators.map((indicator) => (
-        <div
-          key={indicator.id}
-          style={{ marginBottom: 15 }}
-        >
+        <div key={indicator.id} style={{ marginBottom: 15 }}>
           <div
             style={{
               display: "flex",
@@ -3014,9 +1896,7 @@ function SatisfactionDashboard({ satisfaction }) {
             <span>{indicator.label}</span>
 
             <strong>
-              {indicator.implemented
-                ? `${indicator.value}%`
-                : "PLANNED"}
+              {indicator.implemented ? `${indicator.value}%` : "PLANNED"}
             </strong>
           </div>
 
@@ -3031,9 +1911,7 @@ function SatisfactionDashboard({ satisfaction }) {
             <div
               style={{
                 height: "100%",
-                width: indicator.implemented
-                  ? `${indicator.value}%`
-                  : "0%",
+                width: indicator.implemented ? `${indicator.value}%` : "0%",
                 background: indicator.implemented
                   ? getColor(indicator.value)
                   : "#607080",
@@ -3052,10 +1930,9 @@ function SatisfactionDashboard({ satisfaction }) {
           marginBottom: 0,
         }}
       >
-        Satisfaction currently reflects housing,
-        essential supplies, and energy reliability.
-        Healthcare and recreation are reserved for
-        future colony infrastructure.
+        Satisfaction reflects housing, supplied essentials, reliable power,
+        health, and morale. Manage healthcare and recreation in Operations →
+        Crew.
       </p>
     </div>
   );
@@ -3072,6 +1949,13 @@ export default function MarsWorld() {
     selectedBuilding,
     placementMode,
     notification,
+    saveError,
+    networkMode,
+    networkSource,
+    dispatch,
+    chooseNetwork,
+    cancelModes,
+    report,
     activePanel,
 
     satisfaction,
@@ -3082,6 +1966,13 @@ export default function MarsWorld() {
     placeBuilding,
     selectBuilding,
     upgradeBuilding,
+    restoreGame,
+    title,
+    continueGame,
+    movingId,
+    moveBuilding,
+    beginMove,
+    demolishBuilding,
     unlockTechnology,
 
     togglePause,
@@ -3095,6 +1986,8 @@ export default function MarsWorld() {
     setNotification,
   } = useMarsGame();
 
+  const [hoveredPlot, setHoveredPlot] = useState(null);
+
   // ===================================================
   // NEW GAME SCREEN
   // ===================================================
@@ -3104,8 +1997,7 @@ export default function MarsWorld() {
       <div
         style={{
           minHeight: "100vh",
-          background:
-            "linear-gradient(135deg, #0b1018, #261710)",
+          background: "linear-gradient(135deg, #0b1018, #261710)",
           color: "#fff",
           display: "flex",
           justifyContent: "center",
@@ -3125,9 +2017,7 @@ export default function MarsWorld() {
             borderRadius: 20,
           }}
         >
-          <div style={UI.heading}>
-            MARS COLONIZATION PROGRAM
-          </div>
+          <div style={UI.heading}>MARS COLONIZATION PROGRAM</div>
 
           <h1
             style={{
@@ -3148,10 +2038,9 @@ export default function MarsWorld() {
               marginBottom: 30,
             }}
           >
-            Establish a permanent human settlement
-            on Mars. Develop infrastructure, manage
-            resources, research technologies, and
-            expand your colony across the planet.
+            Establish a permanent human settlement on Mars. Develop
+            infrastructure, manage resources, research technologies, and expand
+            your colony across the planet.
           </p>
 
           <button
@@ -3161,6 +2050,11 @@ export default function MarsWorld() {
           >
             START SURVIVAL COLONY
           </button>
+          {loadSavedGame() && (
+            <button style={UI.button} onClick={continueGame}>
+              CONTINUE SAVED COLONY
+            </button>
+          )}
 
           <button
             type="button"
@@ -3182,12 +2076,10 @@ export default function MarsWorld() {
   // ===================================================
 
   return (
-    <div style={UI.root}>
+    <div style={UI.root} className="mars-shell">
       {/* LEFT SIDEBAR */}
-      <aside style={UI.sidebar}>
-        <div style={UI.heading}>
-          MARS COLONIZATION PROGRAM
-        </div>
+      <aside style={UI.sidebar} className="mars-sidebar">
+        <div style={UI.heading}>MARS COLONIZATION PROGRAM</div>
 
         <h2
           style={{
@@ -3234,6 +2126,7 @@ export default function MarsWorld() {
             ["inspect", "INSPECT"],
             ["research", "RESEARCH"],
             ["citizens", "CITIZENS"],
+            ["operations", "OPERATIONS"],
           ].map(([id, label]) => (
             <button
               key={id}
@@ -3245,10 +2138,7 @@ export default function MarsWorld() {
                 textAlign: "center",
                 padding: "10px 4px",
                 fontSize: 11,
-                background:
-                  activePanel === id
-                    ? "#67432f"
-                    : "#263849",
+                background: activePanel === id ? "#67432f" : "#263849",
               }}
             >
               {label}
@@ -3256,17 +2146,35 @@ export default function MarsWorld() {
           ))}
         </div>
 
+        {saveError && (
+          <div role="alert" style={{ ...UI.card, color: "#ffb89b" }}>
+            {saveError}
+          </div>
+        )}
+        {activePanel === "operations" && (
+          <ColonyOperations
+            game={game}
+            dispatch={dispatch}
+            selectedId={selectedId}
+            onSelect={(id) => {
+              setSelectedId(id);
+              setPlacementMode(null);
+            }}
+            networkMode={networkMode}
+            onNetworkMode={chooseNetwork}
+          />
+        )}
         {/* CONSTRUCTION */}
         {activePanel === "build" && (
           <>
-            <div style={UI.heading}>
-              CONSTRUCTION CATALOGUE
-            </div>
+            <div style={UI.heading}>CONSTRUCTION CATALOGUE</div>
 
             <BuildingCatalogue
               game={game}
               placementMode={placementMode}
               onChoose={(type) => {
+                chooseNetwork(null);
+                setActivePanel("build");
                 setPlacementMode(type);
                 setSelectedId(null);
               }}
@@ -3274,20 +2182,14 @@ export default function MarsWorld() {
 
             {placementMode && (
               <div style={UI.card}>
-                <strong>
-                  PLACING: {CATALOG[placementMode].name}
-                </strong>
+                <strong>PLACING: {CATALOG[placementMode].name}</strong>
 
                 <p style={UI.small}>
-                  Click a green construction plot on
-                  the terrain to build.
+                  Click a green plot to build. Escape cancels. Compare ice and
+                  ore yields before choosing a site.
                 </p>
 
-                <button
-                  type="button"
-                  style={UI.button}
-                  onClick={() => setPlacementMode(null)}
-                >
+                <button type="button" style={UI.button} onClick={cancelModes}>
                   CANCEL CONSTRUCTION
                 </button>
               </div>
@@ -3301,20 +2203,17 @@ export default function MarsWorld() {
             building={selectedBuilding}
             game={game}
             onUpgrade={upgradeBuilding}
+            onMove={beginMove}
+            onDemolish={demolishBuilding}
           />
         )}
 
         {/* TECHNOLOGY RESEARCH */}
         {activePanel === "research" && (
           <>
-            <div style={UI.heading}>
-              TECHNOLOGY DEVELOPMENT
-            </div>
+            <div style={UI.heading}>TECHNOLOGY DEVELOPMENT</div>
 
-            <ResearchPanel
-              game={game}
-              onResearch={unlockTechnology}
-            />
+            <ResearchPanel game={game} onResearch={unlockTechnology} />
           </>
         )}
 
@@ -3326,6 +2225,24 @@ export default function MarsWorld() {
           </>
         )}
 
+        <button
+          type="button"
+          style={{ ...UI.button, fontSize: 11 }}
+          onClick={() => {
+            const url = URL.createObjectURL(
+              new Blob([JSON.stringify(game, null, 2)], {
+                type: "application/json",
+              }),
+            );
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `mars-colony-sol-${game.sol}.json`;
+            a.click();
+            window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+          }}
+        >
+          EXPORT COLONY BACKUP
+        </button>
         {/* SIMULATION CONTROLS */}
         <div
           style={{
@@ -3334,26 +2251,14 @@ export default function MarsWorld() {
             paddingTop: 20,
           }}
         >
-          <div style={UI.heading}>
-            SIMULATION CONTROL
-          </div>
+          <div style={UI.heading}>SIMULATION CONTROL</div>
 
-          <button
-            type="button"
-            style={UI.button}
-            onClick={advanceSol}
-          >
+          <button type="button" style={UI.button} onClick={advanceSol}>
             ADVANCE ONE SOL
           </button>
 
-          <button
-            type="button"
-            style={UI.button}
-            onClick={togglePause}
-          >
-            {game.paused
-              ? "RESUME SIMULATION"
-              : "PAUSE SIMULATION"}
+          <button type="button" style={UI.button} onClick={togglePause}>
+            {game.paused ? "RESUME SIMULATION" : "PAUSE SIMULATION"}
           </button>
 
           {game.mode === "sandbox" && (
@@ -3362,8 +2267,7 @@ export default function MarsWorld() {
               style={UI.button}
               onClick={toggleSandboxSurvival}
             >
-              SURVIVAL SYSTEMS:{" "}
-              {game.sandboxSurvival ? "ON" : "OFF"}
+              SURVIVAL SYSTEMS: {game.sandboxSurvival ? "ON" : "OFF"}
             </button>
           )}
 
@@ -3382,14 +2286,49 @@ export default function MarsWorld() {
       </aside>
 
       {/* 3D WORLD */}
-      <main style={UI.world}>
+      <main style={UI.world} className="mars-world">
+        <GameMenu
+          game={game}
+          saveError={saveError}
+          onRestore={restoreGame}
+          onNotify={setNotification}
+          onTitle={title}
+        />
         <MarsScene
           game={game}
           selectedId={selectedId}
           placementMode={placementMode}
           onSelectBuilding={selectBuilding}
           onPlaceBuilding={placeBuilding}
+          onHoverChange={setHoveredPlot}
+          networkMode={networkMode}
+          networkSource={networkSource}
+          report={report}
+          movingId={movingId}
+          onMove={moveBuilding}
         />
+        {placementMode && hoveredPlot && (
+          <PlotReadout
+            game={game}
+            type={placementMode}
+            position={hoveredPlot}
+          />
+        )}
+        {movingId && (
+          <div className="mars-link-hint" role="status">
+            MOVING #{movingId} · Drag to a green plot. Escape cancels.
+            <button onClick={cancelModes}>Cancel move</button>
+          </div>
+        )}
+        {networkMode && (
+          <div className="mars-link-hint" role="status">
+            {networkMode.toUpperCase()} LINK ·{" "}
+            {networkSource === null
+              ? "Select a source building"
+              : `From #${networkSource}: select a destination`}
+            <button onClick={cancelModes}>Cancel</button>
+          </div>
+        )}
 
         {/* TOP STATUS OVERLAY */}
         <div
@@ -3422,9 +2361,16 @@ export default function MarsWorld() {
               color: "#c5d0da",
             }}
           >
-            {territory.title}
-            {" · "}
-            {territory.width} × {territory.width}
+            {territory.title} · {territory.width} × {territory.width}
+            <div
+              style={{
+                marginTop: 6,
+                color: report.weather?.kind === "storm" ? "#ffb16e" : "#89d9c7",
+              }}
+            >
+              {report.weather?.label ?? "Weather monitoring"} ·{" "}
+              {game.paused ? "PAUSED" : "LIVE"}
+            </div>
           </div>
         </div>
 
@@ -3453,13 +2399,15 @@ export default function MarsWorld() {
           WASD — MOVE
           <br />
           Q / E — ROTATE
-          <br />
-          R — RESET CAMERA
+          <br />R — RESET CAMERA
         </div>
 
         {/* NOTIFICATIONS */}
         {notification && (
           <div
+            role="status"
+            className="mars-notification"
+            aria-live="polite"
             style={{
               position: "absolute",
               top: 18,
@@ -3478,6 +2426,7 @@ export default function MarsWorld() {
 
             <button
               type="button"
+              aria-label="Dismiss notification"
               onClick={() => setNotification("")}
               style={{
                 marginLeft: 12,

@@ -1,260 +1,106 @@
-# MARS: THE NEW FRONTIER
+# Mars: The New Frontier
 
-**A browser-based 3D Mars colony-building and management simulator.**
+A browser-based Mars colony builder built with React, Three.js, and React Three Fiber. Build a settlement, connect its utilities, staff its facilities, prepare for dust storms, and complete an eight-stage campaign toward self-sufficiency.
 
-Build a settlement on procedurally generated Martian terrain, manage essential resources, upgrade infrastructure, and support a growing population. *MARS: THE NEW FRONTIER* combines free-camera city building with a resource economy and colony survival simulation.
+![Connected colony gameplay](docs/gameplay-preview.png)
 
-> **Project status:** Version 1.0 release candidate — playable locally. Core systems are implemented; full end-to-end balance and gameplay testing is ongoing.
+## Future development
 
-## Overview
+See the [V2 roadmap](docs/V2_ROADMAP.md) for the planned health and life-support system, multiple colonies, logistics, and release criteria. Roadmap items are proposals, not implemented features.
 
-Your mission is to establish and expand a sustainable settlement on Mars. Place buildings on a terrain grid, invest in power generation and resource extraction, and balance housing capacity against the colony's food, water, and electricity needs. Research technologies and upgrade infrastructure to improve production.
+## Run locally
 
-The project is currently **single-player and local-first**. It runs in a web browser and does not require a hosted backend or external database.
+Use a current Node.js LTS release (Node 22.12+ or Node 24 recommended).
 
-## Features
-
-- **Interactive 3D Martian world:** Procedural terrain, rock formations, atmospheric effects, and an expandable settlement boundary.
-- **Free strategy camera:** Pan, rotate, and zoom around the colony.
-- **Grid-based construction:** Place buildings on valid plots with collision checks and translucent placement previews.
-- **Six building types:** Habitats, solar arrays, water plants, greenhouses, mining facilities, and research centres.
-- **Upgradeable infrastructure:** Building-specific upgrade limits and resource costs, including habitats with up to 15 levels.
-- **Resource management:** Track metal, energy, water, food, and research points.
-- **Per-sol simulation:** Generate resources, consume electricity, and supply colonists with food and water.
-- **Population and wellbeing:** Housing, supplies, and power affect population support, health, growth, and citizen satisfaction.
-- **Technology upgrades:** Unlock production bonuses for power, water, agriculture, mining, and research.
-- **Net production dashboard:** Inspect projected changes to resources per Martian sol.
-- **Local saves:** Colony progress is automatically stored in the browser.
-
-## Technology stack
-
-| Layer | Technology |
-| --- | --- |
-| Frontend | React |
-| Development/build tool | Vite |
-| 3D rendering | Three.js and React Three Fiber |
-| 3D utilities and controls | `@react-three/drei` |
-| Persistence | Browser `localStorage` |
-
-No Python backend, database, NASA API key, or paid hosting account is required to run this version.
-
-## Requirements
-
-- **Node.js** and **npm** installed on your computer (use a current Node.js LTS release compatible with the project's Vite version).
-- A modern browser with WebGL support.
-- Git, if you want to clone the repository.
-
-Check your installation:
-
-```bash
-node --version
-npm --version
-```
-
-## Installation and launch
-
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/devnathpathirana123-web/mars-the-new-frontier.git
-cd mars-the-new-frontier
-```
-
-Alternatively, download the repository ZIP from GitHub and extract it.
-
-### 2. Install dependencies
-
-```bash
-npm install
-```
-
-### 3. Start the development server
-
-```bash
+```sh
+npm ci
 npm run dev
 ```
 
-Open the **Local** address shown in your terminal (often `http://localhost:5173/`). The exact port may differ if another application is using it.
+Open the local URL printed by Vite. Start **Survival** for the campaign or **Sandbox** for free construction. New colonies start paused. **Advance one sol** steps the simulation; **Resume simulation** advances it every five seconds.
 
-To stop the server, press **Ctrl+C** in the terminal.
+## The colony loop
 
-### 4. Create a production build
+1. Place a solar array and connect it to the starting habitat with a power cable.
+2. Power a water plant, then pipe water to the habitat and a powered greenhouse.
+3. Link workplaces to the habitat with pressurized corridors and assign workers.
+4. Build mining and research facilities, improve equipment, and fund maintenance.
+5. Prepare reserves for forecast storms, support arriving colonists, and achieve sustained self-sufficiency.
 
-```bash
+Open **Operations** for **Mission**, **Utilities**, **Crew**, and **Maintenance**. The mission panel explains the current objective and its reward. Rewards are explicit and can be claimed once. The construction inspector compares current and next-level output and demand.
+
+See [the player guide](docs/gameplay.md) for detailed instructions.
+
+## Implemented systems
+
+- **Construction:** six procedural building families, 80 supported upgrade levels, fixed construction plots, collision and route checks, live placement feedback, and spatial ice/ore yields.
+- **Utilities:** separate power, water, and corridor graphs; visible terrain-following routes; per-link construction costs; a 24-unit link limit; and connected/offline facility status. Routes cannot pass through a third building.
+- **Energy:** generation, demand, and stored energy are tracked per connected power component. An isolated solar field cannot power a different grid through the colony-wide resource counter.
+- **Survival:** food, water, serviced housing, health, and morale. Connected workers improve automated base output. Healthcare and recreation consume displayed upkeep supplies.
+- **Mars hazards:** a deterministic weather cycle and three-sol forecast, reduced solar generation during dust events, equipment wear, paid preparation, and repairs. A facility at 15% condition or below stops operating and relaying utilities.
+- **Campaign:** first power, water, agriculture, jobs, industry, research, storm resilience, and three supported sols with at least eight colonists. Arrivals require stable essential services, health, morale, and housing capacity.
+- **Sandbox:** free construction and upgrades. Survival can be enabled separately; with it disabled, simulation does not consume resources or wear equipment.
+- **Persistence:** local autosave, validated version-3 state, safe version-2 migration, and JSON backup export. The original legacy save is retained before migration when browser storage is available.
+
+Shortfalls reduce health and morale and stop growth; the current survival mode allows recovery rather than permanent colonist deaths.
+
+| Building | Levels | Main function |
+| --- | --- | --- |
+| Habitat | 1–15 | Residential capacity and corridor origin |
+| Solar array | 1–10 | Electricity generation |
+| Water plant | 1–15 | Water extraction and pipe supply |
+| Greenhouse | 1–10 | Food production using water and electricity |
+| Mining facility | 1–15 | Metal extraction affected by ore yield |
+| Research centre | 1–15 | Research points and technology development |
+
+## Controls
+
+- Choose a building in **Build**, then click a valid plot.
+- In **Operations → Utilities**, use endpoint selectors or enable the surface tool and click two buildings.
+- Select a building and open **Inspect** to move it by dragging or demolish it with confirmation. Invalid moves preserve the original layout and links.
+- Buildings use level foundation decks and ground-reaching supports to clear uneven terrain.
+- **Escape** cancels construction, utility drawing, or relocation.
+- Left drag pans; right drag rotates; scroll zooms.
+- WASD moves the camera; Q/E rotates; R resets it. Camera shortcuts ignore form inputs.
+
+The interface adapts to narrow screens by placing the map above a scrollable operations panel.
+
+## Saves
+
+Saves live in this browser's local storage under the retained key `mars-new-frontier-save-v2`; the payload is now version 3. Existing version-2 colonies retain their buildings, IDs, levels, resources, and technologies, receive nearby legacy utility connections, and load paused for review. Their original data is stored at the same key plus `-legacy-backup` when storage permits.
+
+Version-3 saves include connections, condition, worker assignments, local battery reserves, policies, and campaign progress. **Export colony backup** downloads a JSON snapshot. Saves are local to the browser and are not cloud-synchronized.
+
+## Development and validation
+
+```sh
 npm run build
+npm run lint
+npm run test:unit
+npx playwright install chromium
+npm test
 ```
 
-Vite writes the production files to `dist/` by default. To preview that build locally:
+With an installed system Chromium:
 
-```bash
-npm run preview
+```sh
+CHROMIUM_PATH=/usr/bin/chromium npm test
 ```
 
-> **Note:** Run these commands from the directory containing `package.json`. If your checkout places the Vite application inside a `frontend/` directory, first run `cd frontend` and execute the npm commands there.
+The unit suite covers graph reachability, source/relay failure, link validation, legacy migration, grid energy isolation, transactional actions, worker limits, policy upkeep, weather protection, repairs, and a complete legal campaign run. Browser tests cover real map construction and cable drawing, utility controls, assignments, policies, repairs, rewards, mobile layout, save reloads, and geometry progression and bounds across all 80 model levels.
 
-## How to play
+Open `/tests/model-review.html` on the development server to inspect models and animations. This review entry is not part of the production build. See [the architecture guide](docs/architecture.md) for the model structure and rendered overview.
 
-1. Launch the game and choose **Survival** or **Sandbox** mode.
-2. Inspect your starting habitat and the available construction territory.
-3. Select a building in the **Build** tab.
-4. Move the cursor over the terrain to see its translucent placement preview. A valid plot is indicated in green; invalid plots are marked in red.
-5. Click an available plot to construct the building.
-6. Use the **Inspect** tab to view and upgrade selected buildings.
-7. Use the **Research** tab to unlock production improvements.
-8. Monitor your resources, net production, colony health, housing, and citizen satisfaction.
-9. Advance the simulation manually or allow it to progress automatically.
-
-### Camera controls
-
-| Input | Action |
-| --- | --- |
-| Left mouse drag | Pan camera |
-| Right mouse drag | Rotate camera |
-| Mouse wheel / scroll | Zoom |
-| `W`, `A`, `S`, `D` | Move camera |
-| `Q` / `E` | Rotate camera |
-| `R` | Reset camera |
-
-## Game modes
-
-### Survival
-
-Construction and upgrades consume resources. Each Martian sol, the simulation attempts to operate the colony's infrastructure, generate resources, and meet colonists' needs. Resource shortages can disrupt operations and reduce colony health.
-
-### Sandbox
-
-Build and upgrade without construction resource costs. By default, sandbox advances the sol counter **without running survival consumption and production**. Use the **Survival Systems** toggle to enable the full resource and population simulation while remaining in sandbox mode.
-
-## Buildings and their roles
-
-| Building | Primary function | Maximum level |
-| --- | --- | ---: |
-| Habitat | Provides housing capacity | 15 |
-| Solar Array | Generates electricity | 10 |
-| Water Plant | Produces water using electricity | 15 |
-| Greenhouse | Produces food using electricity and water | 10 |
-| Mining Facility | Produces metal using electricity | 15 |
-| Research Centre | Generates research points using electricity | 15 |
-
-Upgrades increase output or capacity according to each building's progression rules. They may also increase energy demand and require metal and research points.
-
-## How the colony simulation works
-
-A **sol** is one simulation step. In the current implementation, automatic progression occurs approximately every **five seconds** while the simulation is running. You can also use **Advance One Sol**.
-
-During a simulated sol, the game processes:
-
-1. **Solar generation:** Solar arrays add energy, subject to storage limits.
-2. **Powered housing:** Habitats draw energy and contribute powered housing capacity when sufficient energy is available.
-3. **Water extraction:** Water plants use electricity to produce water.
-4. **Food production:** Greenhouses use electricity and water to produce food.
-5. **Mining and research:** Facilities use electricity to generate metal or research points.
-6. **Colonist consumption:** Each colonist requires food and water.
-7. **Population and health:** Adequate supplies and powered housing support health and eventual population growth; shortages harm colony health.
-
-The processing order matters: buildings may not operate if earlier systems have already used the available energy. Stored resources also have capacity limits.
-
-### Understanding the dashboards
-
-- **Resource totals** show how much metal, energy, water, food, and research is currently stored.
-- **Net production** estimates the change in each resource over the next simulated sol based on the current colony state. It is a projection, not a guarantee of long-term production.
-- **Citizen satisfaction** currently reflects housing, food and water security, and energy reliability. Healthcare and recreation are placeholders for future systems.
-- **Colony status** reports population, housing capacity, health, current sol, and territory size.
-
-## Technology research
-
-The initial research system includes five upgrades:
-
-- **Solar Efficiency:** Increases solar power output.
-- **Water Recycling:** Improves water extraction.
-- **Advanced Agriculture:** Improves greenhouse output.
-- **Automated Mining:** Improves metal production.
-- **Research Optimization:** Improves research point production.
-
-Research is purchased with accumulated research points in Survival mode.
-
-## Project structure
-
-The main application is organized around a game controller and reusable 3D building models:
-
-```text
-mars-the-new-frontier/
-├── src/
-│   ├── App.jsx
-│   ├── main.jsx
-│   └── components/
-│       ├── MarsWorld.jsx
-│       └── buildings/
-│           ├── HabitatModel.jsx
-│           ├── SolarModel.jsx
-│           ├── WaterModel.jsx
-│           ├── GreenhouseModel.jsx
-│           ├── MineModel.jsx
-│           └── ResearchModel.jsx
-├── package.json
-└── README.md
-```
-
-`MarsWorld.jsx` contains the colony state, simulation rules, construction and upgrade logic, camera/world integration, and interface panels. The `buildings/` components define the procedural 3D architecture.
-
-## Saving and resetting
-
-The game automatically saves its current state to your browser's `localStorage`. Returning to the game in the same browser and origin should restore your progress.
-
-- Saves are **local to that browser and website address**; they do not automatically sync between devices.
-- Clearing browser site data may remove your saved colony.
-- **Reset Colony** starts a new colony in the current mode and discards existing progress after confirmation.
-- Save compatibility is not guaranteed across future major changes to the save format.
-
-## Troubleshooting
-
-**`npm` or `node` is not recognized**  
-Install Node.js and reopen your terminal.
-
-**`package.json` cannot be found**  
-Run npm commands from the Vite application directory, not a parent folder.
-
-**The page is blank or a component import fails**  
-Check the terminal and browser console for the exact error. Confirm that filenames in `src/components/buildings/` match the imports in `MarsWorld.jsx`, including capitalization and `.jsx` extensions.
-
-**The development port is already in use**  
-Use the alternative Local URL that Vite prints, or stop the other process using the port.
-
-**A building cannot be placed**  
-Check that the preview indicates a valid plot, the plot is within unlocked territory, no building occupies it, and the colony can afford construction in Survival mode.
-
-**Resources do not change in Sandbox mode**  
-Enable **Survival Systems** if you want normal production and consumption to run.
-
-**A colony save does not appear**  
-Check that you are using the same browser and origin. Browser storage may have been cleared or the save format may have changed.
-
-## Current limitations
-
-Version 1 is an early playable simulation, not a scientifically validated Mars mission model.
-
-- Terrain is **procedurally generated**, not reconstructed from NASA elevation datasets.
-- Resource output and population behavior are gameplay approximations.
-- Electricity is treated as a shared stored resource; there is no physical power-grid or cable network simulation.
-- Mining does not currently model individual ore deposits or depletion.
-- Healthcare and recreation are not yet implemented in the satisfaction calculation.
-- There is no multiplayer, cloud save, or dedicated backend.
-- The economy and balance still need extended playtesting.
-
-## Future development ideas
-
-Potential directions include richer terrain, roads and transport, ore deposits, power-grid constraints, specialized colonist jobs, medical and recreation facilities, additional technologies, more sophisticated population dynamics, and performance improvements.
-
-These are **planned possibilities**, not features included in the current version.
-
-## Contributing
-
-Issues and constructive suggestions are welcome. If you propose a change, describe the problem, how to reproduce it, and the expected behavior. For code contributions, keep changes focused and verify that `npm run build` succeeds.
+The dormant 2D prototype and backup world file remain in the repository; the active entry is `src/main.jsx` → `MarsPreview.jsx` → `MarsWorld.jsx`. Existing lint warnings in those older files are separate from the active gameplay implementation. Rendering has been checked with Chromium; broad hardware performance and touch-camera testing remain future validation work.
 
 ## License
 
-Check the repository for a `LICENSE` file and its terms before reusing or redistributing the code. If no license is present, permission to reuse the source is **not automatically granted**.
+[MIT](LICENSE)
 
----
+## Run on GitHub Pages
 
-**MARS: THE NEW FRONTIER** — Build a colony. Balance its resources. Make the next sol possible.
+This repository includes `.github/workflows/pages.yml`, which builds the JSX into static browser assets and deploys them with GitHub Pages. Merge the complete update into `main`, then open **Settings → Pages → Build and deployment → Source → GitHub Actions**. Push to `main` or run **Actions → Build and deploy game → Run workflow**. The successful deployment shows the game URL. Hosting has not been enabled automatically by this code change.
+
+To replace a local checkout without combining the older feature branches, download the ZIP of the complete update branch, extract it into a separate folder, and run `npm ci` followed by `npm run dev`. Keep a copy of any local edits before replacing files. The branch includes the models, gameplay engine, layout tools, menu, and all shared dependencies.
+
+Use the always-visible **MENU** and **SAVE COLONY** buttons on the map. The menu includes save-file export/import and a support-pillar visibility switch. Saves are local to each browser origin: export from localhost and import into the hosted game to transfer a colony.
