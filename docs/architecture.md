@@ -17,7 +17,7 @@ Every supported level changes the architecture or installed equipment, as well a
 
 ## Integration
 
-Existing component filenames, default exports, and the `level` prop are preserved. The game catalogue, costs, production, resource simulation, building identifiers, and version-2 save format are unchanged. Models additionally accept `animated={false}` for static review.
+Existing component filenames, default exports, and the `level` prop are preserved. Building identifiers and model interfaces remain stable. The connected-colony simulation now adds utility networks, workers, hazards, and campaign progression; version-2 saves migrate to version 3. See [the player guide](gameplay.md) for the gameplay systems. Models additionally accept `animated={false}` for static review.
 
 Shared components live in `src/components/buildings/shared/`. Repeated photovoltaic cells, crops, and ore use instanced geometry. Moving parts have bounded travel; the mine conveyor loops within its tray, the crane stays on its rail, the research dish scans slowly, and advanced solar tables tilt within their support clearances.
 

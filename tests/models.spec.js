@@ -97,6 +97,8 @@ test("game loads and preserves its existing save format", async ({ page }) => {
   ];
   await page.evaluate((items) => {
     const save = JSON.parse(localStorage.getItem("mars-new-frontier-save-v2"));
+    save.version = 2;
+    delete save.links;
     save.buildings = items;
     save.nextId = 7;
     save.paused = true;
@@ -107,8 +109,25 @@ test("game loads and preserves its existing save format", async ({ page }) => {
   const saved = await page.evaluate(() =>
     JSON.parse(localStorage.getItem("mars-new-frontier-save-v2")),
   );
-  expect(saved.version).toBe(2);
-  expect(saved.buildings).toEqual(buildings);
+  expect(saved.version).toBe(3);
+  expect(
+    await page.evaluate(
+      () =>
+        JSON.parse(
+          localStorage.getItem("mars-new-frontier-save-v2-legacy-backup"),
+        )?.version,
+    ),
+  ).toBe(2);
+  expect(
+    saved.buildings.map(({ id, type, level, x, z }) => ({
+      id,
+      type,
+      level,
+      x,
+      z,
+    })),
+  ).toEqual(buildings);
+  await page.getByRole("button", { name: "BUILD", exact: true }).click();
   await expect(
     page.getByRole("button", { name: /Habitat LVL 15 MAX/ }),
   ).toBeVisible();
